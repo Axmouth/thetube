@@ -1,5 +1,5 @@
-use fibril::storage::Storage;
-use fibril::storage::rocksdb_store::RocksStorage;
+use fibril_storage::Storage;
+use fibril_storage::rocksdb_store::RocksStorage;
 use std::time::Instant;
 
 const ITERATIONS: usize = 2_000_000;

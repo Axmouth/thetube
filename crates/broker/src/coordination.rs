@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use tokio::sync::watch;
 
-use crate::storage::{Partition, Topic};
+use fibril_storage::{Partition, Topic};
 
 #[async_trait::async_trait]
 pub trait Coordination: Send + Sync {

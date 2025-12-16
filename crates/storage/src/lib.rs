@@ -2,7 +2,7 @@ pub mod rocksdb_store;
 
 use async_trait::async_trait;
 
-use crate::util::UnixMillis;
+use fibril_util::UnixMillis;
 
 pub type Topic = String;
 pub type Partition = u32;
@@ -231,8 +231,4 @@ pub trait Storage: Send + Sync + std::fmt::Debug {
     async fn recompute_and_store_next_expiry_hint(&self) -> Result<Option<u64>, StorageError>;
 
     async fn dump_meta_keys(&self);
-
-    // TODO: Batch append support (Performance)
-    // We don't need this now, but all high-performance brokers rely on batching.
-    // async fn append_batch(&self, topic, partition, &[payloads]) -> Result<Vec<Offset>>
 }

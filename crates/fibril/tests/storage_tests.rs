@@ -1,4 +1,4 @@
-use fibril::storage::*;
+use fibril_storage::*;
 
 fn make_test_store() -> anyhow::Result<Box<dyn Storage>> {
     // make testdata dir

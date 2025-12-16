@@ -343,6 +343,127 @@ dependencies = [
  "crossbeam",
  "dashmap",
  "fastrand",
+ "fibril-broker",
+ "fibril-storage",
+ "fibril-util",
+ "futures",
+ "postcard",
+ "rmp-serde",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fibril-benches"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "fastrand",
+ "fibril-broker",
+ "fibril-storage",
+ "futures",
+ "postcard",
+ "rmp-serde",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fibril-broker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "fastrand",
+ "fibril-storage",
+ "fibril-util",
+ "futures",
+ "postcard",
+ "rmp-serde",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fibril-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "fastrand",
+ "fibril-broker",
+ "fibril-storage",
+ "fibril-util",
+ "futures",
+ "postcard",
+ "rmp-serde",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fibril-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "fastrand",
+ "fibril-util",
+ "futures",
+ "postcard",
+ "rmp-serde",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fibril-util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "fastrand",
  "futures",
  "postcard",
  "rmp-serde",

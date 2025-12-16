@@ -1,4 +1,6 @@
-use crate::{storage::*, util::unix_millis};
+use crate::*;
+use fibril_util::unix_millis;
+
 use async_trait::async_trait;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded,

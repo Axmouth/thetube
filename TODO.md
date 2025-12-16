@@ -28,8 +28,6 @@ cli
 
 CLIENT (more than library, to play with)
 
-split to workspace(multi crate)
-
 confirm stream(option, config) and test
 
 metadata(content type, redelivered, etc)

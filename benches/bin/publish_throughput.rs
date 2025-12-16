@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use fibril::{
-    broker::{Broker, BrokerConfig, coordination::NoopCoordination},
-    storage::make_rocksdb_store,
-};
-use tokio::time::{Instant};
+use fibril_broker::{Broker, BrokerConfig, coordination::NoopCoordination};
+use fibril_storage::make_rocksdb_store;
+
 use clap::Parser;
+use tokio::time::Instant;
 
 /// Benchmark publisher load.
 #[derive(Parser, Debug)]
@@ -44,13 +43,21 @@ async fn main() {
     let args = Args::parse();
 
     // Set up config
-    let cfg = BrokerConfig { publish_batch_size: args.batch_size, publish_batch_timeout_ms: args.batch_timeout_ms, ..Default::default() };
+    let cfg = BrokerConfig {
+        publish_batch_size: args.batch_size,
+        publish_batch_timeout_ms: args.batch_timeout_ms,
+        ..Default::default()
+    };
 
     // RocksDB setup
     std::fs::create_dir_all(&args.db_path).unwrap();
     let storage = make_rocksdb_store(&args.db_path, args.sync_write).unwrap();
 
-    let broker = Arc::new(Broker::try_new(storage, NoopCoordination {}, cfg).await.unwrap());
+    let broker = Arc::new(
+        Broker::try_new(storage, NoopCoordination {}, cfg)
+            .await
+            .unwrap(),
+    );
 
     println!("Benchmark: Publishing {} messages...", args.messages);
     println!(

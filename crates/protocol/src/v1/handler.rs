@@ -4,16 +4,14 @@ use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use tokio::{net::TcpListener, sync::mpsc};
 use tokio_util::codec::Framed;
-
-use crate::{
-    broker::{AckRequest, Broker, ConsumerConfig, ConsumerHandle, coordination::Coordination},
-    protocol::v1::{
+use fibril_broker::{AckRequest, Broker, ConsumerConfig, ConsumerHandle, coordination::Coordination};
+use 
+    crate::v1::{
         frame::{Frame, ProtoCodec},
         helper::{decode, encode},
         *,
-    },
-    storage::{Group, Partition, Topic},
-};
+    };
+use fibril_storage::{Group, Partition, Topic};
 
 type SubKey = (Topic, Group, Partition); // (topic, group, partition)
 

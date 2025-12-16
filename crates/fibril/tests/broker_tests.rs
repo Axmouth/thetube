@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use fibril::broker::coordination::*;
-use fibril::broker::*;
-use fibril::storage::*;
-use fibril::util::unix_millis;
+use fibril_broker::coordination::*;
+use fibril_broker::*;
+use fibril_storage::*;
+use fibril_util::unix_millis;
 use tokio::task::JoinHandle;
 
 // TODO: make shared
@@ -896,7 +896,7 @@ where
 
 #[tokio::test]
 async fn restart_persists_messages() -> anyhow::Result<()> {
-    use fibril::storage::make_rocksdb_store;
+    use fibril_storage::make_rocksdb_store;
 
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
@@ -958,7 +958,7 @@ async fn restart_persists_messages() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn restart_persists_ack_state() -> anyhow::Result<()> {
-    use fibril::storage::make_rocksdb_store;
+    use fibril_storage::make_rocksdb_store;
 
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
@@ -1043,7 +1043,7 @@ async fn restart_persists_ack_state() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
-    use fibril::storage::make_rocksdb_store;
+    use fibril_storage::make_rocksdb_store;
 
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {

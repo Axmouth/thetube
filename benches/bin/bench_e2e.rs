@@ -6,12 +6,10 @@ use std::{
     time::Instant,
 };
 
-use fibril::broker::coordination::NoopCoordination;
-use fibril::broker::{Broker, BrokerConfig, ConsumerHandle};
-use fibril::{
-    broker::{AckRequest, ConsumerConfig},
-    storage::make_rocksdb_store,
-};
+use fibril_broker::coordination::NoopCoordination;
+use fibril_broker::{Broker, BrokerConfig, ConsumerHandle};
+use fibril_broker::{AckRequest, ConsumerConfig};
+use fibril_storage::make_rocksdb_store;
 
 use clap::{Parser, ValueEnum};
 
