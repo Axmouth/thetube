@@ -141,6 +141,7 @@ impl ConsumerConfig {
 // TODO: Use request IDs?
 // TODO: empty and close channels on drop/shutdown
 pub struct ConsumerHandle {
+    pub sub_id: u64,
     pub config: ConsumerConfig,
     pub group: Group,
     pub topic: Topic,
@@ -266,6 +267,7 @@ pub struct Broker<C: Coordination + Send + Sync + 'static> {
     shutdown: CancellationToken,
     task_group: Arc<TaskGroup>,
     recovered_cursors: Arc<DashMap<(Topic, Partition, Group), GroupCursor>>,
+    next_sub_id: AtomicU64,
 }
 
 impl<C: Coordination + Send + Sync + 'static> Broker<C> {
@@ -327,6 +329,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
             shutdown,
             task_group: Arc::new(TaskGroup::new()),
             recovered_cursors,
+            next_sub_id: AtomicU64::new(0),
         };
 
         broker.start_redelivery_worker();
@@ -416,6 +419,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
         } else {
             cfg.prefetch_count
         };
+        let sub_id = self.next_sub_id.fetch_add(1, Ordering::SeqCst);
         self.topics.entry(topic.to_string()).or_insert(());
 
         self.storage
@@ -483,6 +487,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
 
             self.task_group.spawn(async move {
                 let mut inflight_batch = Vec::with_capacity(32);
+                // TODO: Keep track of still unacked messages, redeliver on consumer disconnect
                 // Dedicated delivery loop for this (topic, group)
                 loop {
                     if shutdown.is_cancelled() {
@@ -532,10 +537,11 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                             // reinsert inflight entry with new deadline
                             let new_deadline = unix_millis() + ttl * 1000;
 
+                            // TODO: Improve to account for dead consumers
                             // deliver to consumer via round-robin
                             let rr = group_state.rr_counter.fetch_add(1, Ordering::SeqCst) as usize;
 
-                            // TODO: handle empty consumers case
+                            // TODO: handle empty consumers case (though ironic case to happen in delivery loop)
                             let (cid, tx) = &consumers[rr % consumers.len()];
 
                             let permit: OwnedSemaphorePermit =
@@ -883,6 +889,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
         group_state.notify.notify_one();
 
         Ok(ConsumerHandle {
+            sub_id,
             group: group.to_string(),
             topic: topic.to_string(),
             partition,

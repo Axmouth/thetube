@@ -1,17 +1,18 @@
 use std::{collections::HashMap, sync::Arc};
 
+use crate::v1::{
+    frame::{Frame, ProtoCodec},
+    helper::{decode, encode},
+    *,
+};
 use anyhow::Context;
+use fibril_broker::{
+    AckRequest, Broker, ConsumerConfig, ConsumerHandle, coordination::Coordination,
+};
+use fibril_storage::{Group, Partition, Topic};
 use futures::{SinkExt, StreamExt};
 use tokio::{net::TcpListener, sync::mpsc};
 use tokio_util::codec::Framed;
-use fibril_broker::{AckRequest, Broker, ConsumerConfig, ConsumerHandle, coordination::Coordination};
-use 
-    crate::v1::{
-        frame::{Frame, ProtoCodec},
-        helper::{decode, encode},
-        *,
-    };
-use fibril_storage::{Group, Partition, Topic};
 
 type SubKey = (Topic, Group, Partition); // (topic, group, partition)
 
@@ -27,6 +28,7 @@ struct SubscriptionHandle {
 }
 
 struct SubState {
+    sub_id: u64,
     auto_ack: bool,
     acker: tokio::sync::mpsc::Sender<AckRequest>,
 }
@@ -50,6 +52,7 @@ pub async fn run_server<C: Coordination + Send + Sync + 'static>(
     }
 }
 
+// TODO: Add optional auth, and related handling
 pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     socket: tokio::net::TcpStream,
     broker: Arc<Broker<C>>,
@@ -166,7 +169,10 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                     .context("subscribe failed")?;
 
                 let ConsumerHandle {
-                    messages, acker, ..
+                    messages,
+                    acker,
+                    sub_id,
+                    ..
                 } = consumer;
 
                 let auto_ack = sub.auto_ack;
@@ -191,10 +197,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                         println!("Sending Deliver");
 
                         // 1. Try to write to socket
-                        if let Err(err) = tx_clone
-                            .send(encode(Op::Deliver, 0, &deliver))
-                            .await
-                        {
+                        if let Err(err) = tx_clone.send(encode(Op::Deliver, 0, &deliver)).await {
                             // Socket dead -> do NOT auto-ack
                             eprintln!("Failed to send to socket writer : {err}");
                             break;
@@ -202,7 +205,11 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
 
                         // 2. Auto-ack ONLY after successful send
                         if auto_ack {
-                            let _ = acker.send(AckRequest { delivery_tag: msg.delivery_tag }).await;
+                            let _ = acker
+                                .send(AckRequest {
+                                    delivery_tag: msg.delivery_tag,
+                                })
+                                .await;
                         }
                     }
                 });
@@ -210,6 +217,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                 state.subs.insert(
                     key,
                     SubState {
+                        sub_id,
                         auto_ack: sub.auto_ack,
                         acker: acker_clone,
                     },
@@ -219,6 +227,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                     Op::SubscribeOk,
                     frame.request_id,
                     &SubscribeOk {
+                        sub_id,
                         topic: sub.topic,
                         group: sub.group,
                         partition: 0,
@@ -235,12 +244,13 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                 let key: SubKey = (ack.topic.clone(), ack.group.clone(), ack.partition);
 
                 if let Some(sub) = state.subs.get(&key)
-                    && !sub.auto_ack {
-                        for off in ack.offsets {
-                            let req = AckRequest { delivery_tag: off };
-                            let _ = sub.acker.send(req).await;
-                        }
+                    && !sub.auto_ack
+                {
+                    for off in ack.offsets {
+                        let req = AckRequest { delivery_tag: off };
+                        let _ = sub.acker.send(req).await;
                     }
+                }
                 // Unknown subscription: ignore (idempotent)
             }
 

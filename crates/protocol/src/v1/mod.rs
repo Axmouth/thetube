@@ -75,6 +75,7 @@ pub struct Subscribe {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SubscribeOk {
+    pub sub_id: u64,
     pub topic: String,
     pub group: String,
     pub partition: u32,
