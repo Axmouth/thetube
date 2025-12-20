@@ -2,16 +2,16 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use tokio::sync::watch;
 
-use fibril_storage::{Partition, Topic};
+use fibril_storage::{LogId, Topic};
 
 #[async_trait::async_trait]
 pub trait Coordination: Send + Sync {
-    async fn is_leader(&self, topic: Topic, partition: Partition) -> bool;
+    async fn is_leader(&self, topic: Topic, partition: LogId) -> bool;
     #[deprecated]
-    async fn await_leadership(&self, topic: Topic, partition: Partition);
+    async fn await_leadership(&self, topic: Topic, partition: LogId);
     fn node_id(&self) -> &str;
-    async fn watch_leadership(&self, topic: Topic, partition: Partition) -> LeadershipStream;
-    async fn leader_for(&self, topic: Topic, partition: Partition) -> Option<NodeInfo>;
+    async fn watch_leadership(&self, topic: Topic, partition: LogId) -> LeadershipStream;
+    async fn leader_for(&self, topic: Topic, partition: LogId) -> Option<NodeInfo>;
 
     // stub: no-op for single node now
 }
@@ -33,11 +33,11 @@ pub struct NoopCoordination;
 
 #[async_trait::async_trait]
 impl Coordination for NoopCoordination {
-    async fn is_leader(&self, _: Topic, _: Partition) -> bool {
+    async fn is_leader(&self, _: Topic, _: LogId) -> bool {
         true
     }
 
-    async fn await_leadership(&self, _: Topic, _: Partition) {
+    async fn await_leadership(&self, _: Topic, _: LogId) {
         // no-op
     }
 
@@ -45,14 +45,14 @@ impl Coordination for NoopCoordination {
         "local"
     }
 
-    async fn leader_for(&self, _: Topic, _: Partition) -> Option<NodeInfo> {
+    async fn leader_for(&self, _: Topic, _: LogId) -> Option<NodeInfo> {
         Some(NodeInfo {
             node_id: self.node_id().to_string(),
             address: IpAddr::V4(Ipv4Addr::from_octets([127, 0, 0, 1])),
         })
     }
 
-    async fn watch_leadership(&self, _: Topic, _: Partition) -> watch::Receiver<LeadershipEvent> {
+    async fn watch_leadership(&self, _: Topic, _: LogId) -> watch::Receiver<LeadershipEvent> {
         let (tx, rx) = watch::channel(LeadershipEvent::Gained);
         drop(tx); // never changes
         rx

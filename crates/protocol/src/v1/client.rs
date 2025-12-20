@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use futures::{SinkExt, StreamExt};
 
 use crate::v1::{Ack, Deliver, ErrorMsg, Hello, HelloOk, Op, PROTOCOL_V1, Publish, PublishOk, Subscribe, helper::{Conn, decode, encode}};
+
 static REQ: AtomicU64 = AtomicU64::new(1);
 
 fn next_req_id() -> u64 {

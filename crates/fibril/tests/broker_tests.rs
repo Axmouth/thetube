@@ -22,12 +22,12 @@ async fn make_test_broker() -> anyhow::Result<Broker<NoopCoordination>> {
         store,
         NoopCoordination,
         BrokerConfig {
-            cleanup_interval_secs: 5,
+            cleanup_interval_secs: 150,
             inflight_ttl_secs: 3,
-            publish_batch_size: 10,
-            publish_batch_timeout_ms: 100,
-            ack_batch_size: 10,
-            ack_batch_timeout_ms: 100,
+            publish_batch_size: 64,
+            publish_batch_timeout_ms: 1,
+            ack_batch_size: 64,
+            ack_batch_timeout_ms: 1,
             reset_inflight: false,
         },
     )
@@ -666,6 +666,7 @@ async fn publish_burst_then_consume_everything() -> anyhow::Result<()> {
     };
 
     let broker = Broker::try_new(store, coord, cfg).await?;
+    let (pubh, mut confirms) = broker.get_publisher("topic").await?;
 
     // Insert messages with known patterns
     let mut payloads = Vec::new();
@@ -674,7 +675,18 @@ async fn publish_burst_then_consume_everything() -> anyhow::Result<()> {
         let mut buf = vec![0u8; size];
         fastrand::fill(&mut buf);
         payloads.push((i as u64, buf.clone()));
-        broker.publish("topic", &buf).await?;
+        pubh.publish(buf).await?;
+    }
+
+    // wait until we see total confirms
+    let mut n = 0;
+    while n < total {
+        if let Some(res) = confirms.recv_confirm().await {
+            res?; // propagate error
+            n += 1;
+        } else {
+            anyhow::bail!("confirm stream closed early");
+        }
     }
 
     // Now consume them
@@ -728,10 +740,14 @@ async fn concurrent_publish_and_consume() -> anyhow::Result<()> {
     for _ in 0..4 {
         let b = broker.clone();
         pub_tasks.push(tokio::spawn(async move {
+            let (pubh, mut confirms) = b.get_publisher("topic").await?;
             for i in 0..(total / 4) {
                 let mut buf = vec![0u8; 128];
                 buf[0..8].copy_from_slice(&(i as u64).to_be_bytes());
-                b.publish("topic", &buf).await?;
+                pubh.publish(buf).await?;
+            }
+            for _i in 0..(total / 4) {
+                confirms.recv_confirm().await;
             }
             Ok(())
         }));
@@ -816,27 +832,56 @@ async fn redelivery_under_load_64k() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn redelivery_under_load_128k() -> anyhow::Result<()> {
+    let total = 128_000;
+
+    redelivery_under_load(total).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn redelivery_under_load_256k() -> anyhow::Result<()> {
+    let total = 256_000;
+
+    redelivery_under_load(total).await?;
+    Ok(())
+}
+
 async fn redelivery_under_load(total: usize) -> anyhow::Result<()> {
     let store = make_test_store()?;
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
-        publish_batch_size: 32,
         publish_batch_timeout_ms: 1,
         inflight_ttl_secs: 5,
         ..Default::default()
     }; // <-- generous TTL
+
     let broker = Broker::try_new(store, coord, cfg).await?;
+
+    let (pubh, mut confirms) = broker.get_publisher("t").await?;
 
     // Publish burst
     for _ in 0..total {
-        broker.publish("t", b"x").await?;
+        pubh.publish(b"x".to_vec()).await?;
+    }
+
+    // wait until we see total confirms
+    let mut n = 0;
+    while n < total {
+        if let Some(res) = confirms.recv_confirm().await {
+            res?; // propagate error
+            n += 1;
+        } else {
+            anyhow::bail!("confirm stream closed early");
+        }
     }
 
     let mut c = broker
         .subscribe(
             "t",
             "g",
-            make_default_cons_cfg().with_prefetch_count(total + 1),
+            make_default_cons_cfg().with_prefetch_count(total * 100 + 1),
         )
         .await?;
 
@@ -976,11 +1021,16 @@ async fn restart_persists_ack_state() -> anyhow::Result<()> {
     {
         let store = make_rocksdb_store(&db_path, false)?;
         let broker = Broker::try_new(store, coord.clone(), cfg.clone()).await?;
+        let (pubh, mut confirms) = broker.get_publisher("restart_ack_topic").await?;
 
         for i in 0..10 {
-            broker
-                .publish("restart_ack_topic", format!("m{i}").as_bytes())
+            pubh
+                .publish(format!("m{i}").as_bytes().to_vec())
                 .await?;
+        }
+        
+        for _i in 0..10 {
+            confirms.recv_confirm().await;
         }
 
         let mut cons = broker
@@ -1047,8 +1097,8 @@ async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
 
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
-        publish_batch_size: 10,
-        publish_batch_timeout_ms: 10,
+        publish_batch_size: 16,
+        publish_batch_timeout_ms: 3,
         inflight_ttl_secs: 1,
         cleanup_interval_secs: 7,
         ..Default::default()
@@ -1058,16 +1108,20 @@ async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
     let db_path = format!("test_data/restart_redel_{}", fastrand::u64(..));
 
     let offset: Offset;
+    let topic: Topic = String::from("rr_topic");
 
     // 1) First broker: publish + first delivery (no ACK)
     {
         let store = make_rocksdb_store(&db_path, false)?;
         let broker = Broker::try_new(store, coord.clone(), cfg.clone()).await?;
 
-        broker.publish("rr_topic", b"hello").await?;
+        let (pubh, mut confirms) = broker.get_publisher(&topic).await?;
+        pubh.publish(b"hello".to_vec()).await?;
+
+        confirms.recv_confirm().await;
 
         let mut cons = broker
-            .subscribe("rr_topic", "g", make_default_cons_cfg())
+            .subscribe(&topic, "g", make_default_cons_cfg())
             .await?;
         let m1 = cons.messages.recv().await.context("receiving message")?;
         assert_eq!(m1.message.payload, b"hello");
@@ -1075,13 +1129,13 @@ async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
 
         // Do not ACK
         drop(cons);
+        drop(confirms);
         broker.shutdown().await;
         drop(broker);
-        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
     // Wait past TTL so the inflight entry is expired in storage
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     // 2) Second broker: same DB, new worker, must redeliver
     {
@@ -1089,7 +1143,7 @@ async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
         let broker = Arc::new(Broker::try_new(store, coord.clone(), cfg.clone()).await?);
 
         let mut cons = broker
-            .subscribe("rr_topic", "g", make_default_cons_cfg())
+            .subscribe(&topic, "g", make_default_cons_cfg())
             .await?;
 
         let redelivered = cons.messages.recv().await.context("receiving message")?;
@@ -1114,11 +1168,15 @@ async fn work_queue_fair_distribution() -> anyhow::Result<()> {
 
     let total = 6000;
 
+    let (pubh, mut confirms) = broker.get_publisher("jobs_fair").await?;
+
     // Publish work
     for i in 0..total {
-        broker
-            .publish("jobs_fair", format!("job-{i}").as_bytes())
-            .await?;
+        pubh.publish(format!("job-{i}").as_bytes().to_vec()).await?;
+    }
+
+    for _i in 0..total {
+        confirms.recv_confirm().await;
     }
 
     let mut c1 = broker
@@ -1268,7 +1326,7 @@ async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
     let total = 10_000;
 
     // Publisher task
-    let b_pub = broker.clone();
+    let (b_pub, mut confirms) = broker.get_publisher("fuzz_topic").await?;
     let pub_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
         for i in 0..total {
             let action = fastrand::u8(..100);
@@ -1276,12 +1334,16 @@ async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
             if action < 80 {
                 // publish
                 let payload = format!("m-{i}").into_bytes();
-                b_pub.publish("fuzz_topic", &payload).await?;
+                b_pub.publish(payload).await?;
             } else {
                 // short pause to mix timing
                 tokio::time::sleep(std::time::Duration::from_micros(100)).await;
             }
         }
+        Ok(())
+    });
+    let conf_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+        while (confirms.recv_confirm().await).is_some() {}
         Ok(())
     });
 
@@ -1311,6 +1373,7 @@ async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
     }
 
     pub_task.await??;
+    conf_task.await??;
 
     // Wait for redeliveries to settle
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -1368,7 +1431,7 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
     let total = 10_000;
 
     // Publisher task
-    let b_pub = broker.clone();
+    let (b_pub, mut confirms) = broker.get_publisher("fuzz_topic").await?;
     let pub_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
         for i in 0..total {
             let action = fastrand::u8(..100);
@@ -1376,7 +1439,7 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
             if action < 80 {
                 // publish
                 let payload = format!("m-{i}").into_bytes();
-                b_pub.publish("fuzz_topic", &payload).await?;
+                b_pub.publish(payload).await?;
             } else {
                 // short pause to mix timing
                 tokio::time::sleep(std::time::Duration::from_micros(100)).await;
@@ -1384,6 +1447,7 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
         }
         Ok(())
     });
+    let conf_task = tokio::spawn(async move { while confirms.recv_confirm().await.is_some() {} });
 
     // Consumer/ACK behavior with some random drops
     let mut received = Vec::new();
@@ -1411,6 +1475,7 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
     }
 
     pub_task.await??;
+    conf_task.await?;
 
     // Wait for redeliveries to settle
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -1516,8 +1581,9 @@ async fn crash_after_send_before_inflight_causes_redelivery() -> anyhow::Result<
     {
         let store = make_rocksdb_store(&db_path, false)?;
         let broker = Broker::try_new(store, coord.clone(), cfg.clone()).await?;
-
-        broker.publish("t", b"x").await?;
+        let (pubh, mut confirms) = broker.get_publisher("t").await?;
+        pubh.publish(b"x".to_vec()).await?;
+        confirms.recv_confirm().await;
         let mut c = broker.subscribe("t", "g", make_default_cons_cfg()).await?;
 
         let m = c.messages.recv().await.context("receiving message")?;

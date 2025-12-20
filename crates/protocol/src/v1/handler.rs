@@ -9,33 +9,29 @@ use anyhow::Context;
 use fibril_broker::{
     AckRequest, Broker, ConsumerConfig, ConsumerHandle, coordination::Coordination,
 };
-use fibril_storage::{Group, Partition, Topic};
+use fibril_storage::{Group, LogId, Topic};
 use futures::{SinkExt, StreamExt};
 use tokio::{net::TcpListener, sync::mpsc};
 use tokio_util::codec::Framed;
 
-type SubKey = (Topic, Group, Partition); // (topic, group, partition)
+type SubKey = (Topic, Group); // (topic, group)
 
 struct ConnState {
     authenticated: bool,
     subs: HashMap<SubKey, SubState>,
 }
 
-struct SubscriptionHandle {
-    topic: String,
-    group: String,
-    consumer: ConsumerHandle,
-}
-
 struct SubState {
     sub_id: u64,
     auto_ack: bool,
     acker: tokio::sync::mpsc::Sender<AckRequest>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 pub async fn run_server<C: Coordination + Send + Sync + 'static>(
     addr: &str,
     broker: Arc<Broker<C>>,
+    auth: Option<impl AuthHandler + Send + Sync + Clone + 'static>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     println!("listening on {}", addr);
@@ -44,20 +40,22 @@ pub async fn run_server<C: Coordination + Send + Sync + 'static>(
         let (socket, peer) = listener.accept().await?;
         let broker = broker.clone();
 
+        let auth = auth.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, broker).await {
+            if let Err(e) = handle_connection(socket, broker, auth).await {
                 eprintln!("conn {} error: {:?}", peer, e);
             }
         });
     }
 }
 
-// TODO: Add optional auth, and related handling
 pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     socket: tokio::net::TcpStream,
     broker: Arc<Broker<C>>,
+    auth_handler: Option<impl AuthHandler + Send + Sync>,
 ) -> anyhow::Result<()> {
     // ---- Framed socket -----------------------------------------------------
+    let peer_addr = socket.peer_addr().ok();
     let framed = Framed::new(socket, ProtoCodec);
     let (mut writer, mut reader) = framed.split();
 
@@ -66,13 +64,20 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
 
     // ---- Writer task -------------------------------------------------------
     let writer_task = tokio::spawn(async move {
+        eprintln!("[writer] START");
+
         while let Some(frame) = rx.recv().await {
-            println!("Writing Frame to tcp socket.. code={}", frame.opcode);
+            println!(
+                "[writer] Writing Frame to tcp socket.. code={}",
+                frame.opcode
+            );
             if let Err(err) = writer.send(frame).await {
-                eprintln!("Error writing to tcp socket : {err}");
+                eprintln!("[writer] Error writing to tcp socket : {err}");
                 break;
             }
         }
+
+        eprintln!("[writer] EXIT");
     });
 
     // ---- Connection state --------------------------------------------------
@@ -128,34 +133,97 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     .await?;
 
     // ---- Main reader loop --------------------------------------------------
-    while let Some(frame) = reader.next().await {
+    while let Some(frame) = tokio::time::timeout(std::time::Duration::from_secs(30), reader.next()).await? {
         let frame = frame?;
+
+        let auth_required = auth_handler.is_some();
+        let is_auth = frame.opcode == Op::Auth as u16;
+        let is_ping = frame.opcode == Op::Ping as u16;
+
+        if auth_required && !state.authenticated && !(is_auth || is_ping) {
+            tx.send(encode(
+                Op::Error,
+                frame.request_id,
+                &ErrorMsg {
+                    code: 401,
+                    message: "authentication required".into(),
+                },
+            ))
+            .await?;
+
+            break; // close connection
+        }
 
         match frame.opcode {
             // -------- AUTH ---------------------------------------------------
             x if x == Op::Auth as u16 => {
-                let auth: Auth = decode(&frame);
-
-                // TODO: real auth backend
-                if auth.username == "guest" && auth.password == "guest" {
-                    state.authenticated = true;
-                    tx.send(encode(Op::AuthOk, frame.request_id, &())).await?;
-                } else {
+                if state.authenticated {
                     tx.send(encode(
                         Op::AuthErr,
                         frame.request_id,
                         &ErrorMsg {
                             code: 401,
-                            message: "invalid credentials".into(),
+                            message: "already authenticated".into(),
                         },
                     ))
                     .await?;
+                } else if auth_handler.is_none() {
+                    tx.send(encode(
+                        Op::AuthErr,
+                        frame.request_id,
+                        &ErrorMsg {
+                            code: 400,
+                            message: "authentication not applicable".into(),
+                        },
+                    ))
+                    .await?;
+                } else {
+                    // ---- AUTH handshake -------------------------------------
+                    if let Some(auth_handler) = &auth_handler {
+                        let auth_frame: Auth = decode(&frame);
+
+                        let verified = auth_handler
+                            .verify(&auth_frame.username, &auth_frame.password)
+                            .await;
+
+                        if verified {
+                            state.authenticated = true;
+                            tx.send(encode(Op::AuthOk, frame.request_id, &())).await?;
+                        } else {
+                            tx.send(encode(
+                                Op::AuthErr,
+                                frame.request_id,
+                                &ErrorMsg {
+                                    code: 401,
+                                    message: "invalid credentials".into(),
+                                },
+                            ))
+                            .await?;
+
+                            break; // close connection
+                        }
+                    }
                 }
             }
 
             // -------- SUBSCRIBE ---------------------------------------------
             x if x == Op::Subscribe as u16 => {
                 let sub: Subscribe = decode(&frame);
+
+                let sub_key: SubKey = (sub.topic.clone(), sub.group.clone());
+
+                if state.subs.contains_key(&sub_key) {
+                    tx.send(encode(
+                        Op::SubscribeErr,
+                        frame.request_id,
+                        &ErrorMsg {
+                            code: 409,
+                            message: "already subscribed".into(),
+                        },
+                    ))
+                    .await?;
+                    continue;
+                }
 
                 let consumer = broker
                     .subscribe(
@@ -178,14 +246,13 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                 let auto_ack = sub.auto_ack;
                 let tx_clone = tx.clone();
 
-                let key: SubKey = (sub.topic.clone(), sub.group.clone(), consumer.partition);
-
                 let acker_clone = acker.clone();
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let mut rx = messages;
 
                     while let Some(msg) = rx.recv().await {
                         let deliver = Deliver {
+                            sub_id,
                             topic: msg.message.topic.clone(),
                             group: msg.group.clone(),
                             partition: msg.message.partition,
@@ -215,9 +282,10 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                 });
 
                 state.subs.insert(
-                    key,
+                    sub_key,
                     SubState {
                         sub_id,
+                        task: handle,
                         auto_ack: sub.auto_ack,
                         acker: acker_clone,
                     },
@@ -230,7 +298,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                         sub_id,
                         topic: sub.topic,
                         group: sub.group,
-                        partition: 0,
+                        partition: consumer.partition,
                     },
                 ))
                 .await?;
@@ -241,7 +309,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                 // TODO: Decline ack when auto ack? Log?
                 let ack: Ack = decode(&frame);
 
-                let key: SubKey = (ack.topic.clone(), ack.group.clone(), ack.partition);
+                let key: SubKey = (ack.topic.clone(), ack.group.clone());
 
                 if let Some(sub) = state.subs.get(&key)
                     && !sub.auto_ack
@@ -258,6 +326,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
             x if x == Op::Publish as u16 => {
                 let pubreq: Publish = decode(&frame);
 
+                // TODO: USE PUBLISHER(cache them in a dashmap?)
                 match broker.publish(&pubreq.topic, &pubreq.payload).await {
                     Ok(offset) => {
                         if pubreq.require_confirm {
@@ -306,6 +375,12 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     // ---- Connection closing ------------------------------------------------
     drop(tx); // closes writer channel
     let _ = writer_task.await;
+
+    for (_, sub) in state.subs.drain() {
+        sub.task.abort();
+    }
+
+    eprintln!("[conn] EXIT handle_connection peer={:?}", peer_addr);
 
     Ok(())
 }

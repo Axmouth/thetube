@@ -23,6 +23,7 @@ pub enum Op {
 
     Subscribe   = 30,
     SubscribeOk = 31,
+    SubscribeErr= 32,
 
     Deliver     = 40,
     Ack         = 41,
@@ -83,6 +84,7 @@ pub struct SubscribeOk {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Deliver {
+    pub sub_id: u64,
     pub topic: String,
     pub group: String,
     pub partition: u32,
@@ -99,8 +101,13 @@ pub struct Ack {
     pub offsets: Vec<u64>, // batch
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorMsg {
     pub code: u16,
     pub message: String,
+}
+
+#[async_trait::async_trait]
+pub trait AuthHandler {
+    async fn verify(&self, username: &str, password: &str) -> bool;
 }

@@ -5,8 +5,7 @@ use crossterm::{
     terminal::{Clear, ClearType, disable_raw_mode},
 };
 use fibril_protocol::v1::{
-    Deliver, ErrorMsg, Hello, HelloOk, Op, PROTOCOL_V1, Publish, Subscribe, SubscribeOk,
-    frame::ProtoCodec, helper::Conn,
+    Auth, Deliver, ErrorMsg, Hello, HelloOk, Op, PROTOCOL_V1, Publish, Subscribe, SubscribeOk, frame::ProtoCodec, helper::Conn
 };
 use futures::{SinkExt, StreamExt};
 use ratatui::{
@@ -26,6 +25,8 @@ use tokio_util::codec::Framed;
 
 #[derive(Debug)]
 pub enum VisualEvent {
+    Auth { pub_id: usize },
+    AuthOk { sub_id: usize },
     Hello { pub_id: usize },
     HelloOk { sub_id: usize },
     Subscribe { sub_id: usize },
@@ -493,6 +494,22 @@ fn handle_event(app: &mut App, ev: VisualEvent) {
                 color: Color::Magenta,
             });
         }
+        VisualEvent::Auth { pub_id, .. } => {
+            app.inflight.push(InFlight {
+                from: pub_id,
+                to: app.broker.id,
+                progress: 0.0,
+                color: Color::LightYellow,
+            });
+        }
+        VisualEvent::AuthOk { sub_id, .. } => {
+            app.inflight.push(InFlight {
+                from: app.broker.id,
+                to: sub_id,
+                progress: 0.0,
+                color: Color::LightGreen,
+            });
+        }
     }
 }
 
@@ -552,6 +569,46 @@ pub async fn visual_client(
 
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
+    // Send AUTH
+    conn.send(fibril_protocol::v1::helper::encode(
+        Op::Auth,
+        next_req_id(),
+        &Auth {
+            username: "fibril".to_string(),
+            password: "fibril".to_string(),
+        },
+    ))
+    .await?;
+    let _ = vis_tx.send(VisualEvent::Auth { pub_id }).await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    // Wait for HELLOOK / HELLOERR
+    let frame = conn
+        .next()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("connection closed during hello"))??;
+
+    match frame.opcode {
+        x if x == Op::AuthOk as u16 => {
+
+            let _ = vis_tx.send(VisualEvent::AuthOk { sub_id }).await;
+        }
+        x if x == Op::AuthErr as u16 => {
+            let err: ErrorMsg = fibril_protocol::v1::helper::decode(&frame);
+            let _ = vis_tx
+                .send(VisualEvent::ErrorMsg {
+                    sub_id,
+                    code: err.code,
+                })
+                .await;
+            // anyhow::bail!("HELLO rejected: {}", err.message);
+        }
+        _ => {
+            // anyhow::bail!("unexpected frame during HELLO: {}", frame.opcode);
+        }
+    }
+
     // ---- SUBSCRIBE -------------------------------------------------------
     conn.send(fibril_protocol::v1::helper::encode(
         Op::Subscribe,
@@ -577,11 +634,6 @@ pub async fn visual_client(
     match frame.opcode {
         x if x == Op::SubscribeOk as u16 => {
             let _ok: SubscribeOk = fibril_protocol::v1::helper::decode(&frame);
-
-            // println!(
-            //     "SUBSCRIBE OK topic={} group={} partition={}",
-            //     ok.topic, ok.group, ok.partition
-            // );
 
             let _ = vis_tx.send(VisualEvent::SubscribeOk { sub_id }).await;
         }

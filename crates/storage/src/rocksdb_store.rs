@@ -14,6 +14,8 @@ pub struct RocksStorage {
     sync_write: bool,
 }
 
+
+// TODO: Use spawn blocking or equivalent?
 impl RocksStorage {
     const META_NEXT_EXPIRY_TS: &'static [u8] = b"NEXT_EXPIRY_TS"; // global hint (UnixMillis)
 
@@ -74,11 +76,11 @@ impl RocksStorage {
         Ok(storage)
     }
 
-    fn next_offset_key(topic: &Topic, partition: Partition) -> String {
+    fn next_offset_key(topic: &Topic, partition: LogId) -> String {
         format!("NEXT_OFFSET:{}:{}", topic, partition)
     }
 
-    fn encode_msg_key(topic: &Topic, partition: Partition, offset: Offset) -> Vec<u8> {
+    fn encode_msg_key(topic: &Topic, partition: LogId, offset: Offset) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(topic.as_bytes());
         v.push(0);
@@ -89,7 +91,7 @@ impl RocksStorage {
 
     fn encode_group_key(
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         offset: Offset,
     ) -> Vec<u8> {
@@ -165,7 +167,7 @@ impl Storage for RocksStorage {
     async fn append(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         payload: &[u8],
     ) -> Result<Offset, StorageError> {
         let meta_cf = self
@@ -200,7 +202,7 @@ impl Storage for RocksStorage {
     async fn append_batch(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         payloads: &[Vec<u8>],
     ) -> Result<Vec<Offset>, StorageError> {
         if payloads.is_empty() {
@@ -240,7 +242,7 @@ impl Storage for RocksStorage {
     async fn register_group(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
     ) -> Result<(), StorageError> {
         let groups_cf = self.cf("groups")?;
@@ -258,7 +260,7 @@ impl Storage for RocksStorage {
     async fn fetch_by_offset(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         offset: Offset,
     ) -> Result<StoredMessage, StorageError> {
         let messages_cf = self
@@ -285,7 +287,7 @@ impl Storage for RocksStorage {
     async fn fetch_available(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         from_offset: Offset,
         max: usize,
@@ -378,7 +380,7 @@ impl Storage for RocksStorage {
     async fn current_next_offset(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
     ) -> Result<Offset, StorageError> {
         let meta_cf = self
             .db
@@ -401,7 +403,7 @@ impl Storage for RocksStorage {
     async fn fetch_available_clamped(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         from_offset: Offset,
         max_offset_exclusive: Offset,
@@ -427,7 +429,7 @@ impl Storage for RocksStorage {
     async fn fetch_range(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         from_offset: Offset,
         to_offset: Offset,
@@ -513,7 +515,7 @@ impl Storage for RocksStorage {
     async fn mark_inflight(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         offset: Offset,
         deadline_ts: UnixMillis,
@@ -535,7 +537,7 @@ impl Storage for RocksStorage {
     async fn mark_inflight_batch(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         entries: &[(Offset, UnixMillis)],
     ) -> Result<(), StorageError> {
@@ -566,7 +568,7 @@ impl Storage for RocksStorage {
     async fn ack(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         offset: Offset,
     ) -> Result<(), StorageError> {
@@ -606,7 +608,7 @@ impl Storage for RocksStorage {
     async fn ack_batch(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         offsets: &[Offset],
     ) -> Result<(), StorageError> {
@@ -698,7 +700,7 @@ impl Storage for RocksStorage {
     async fn lowest_unacked_offset(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
     ) -> Result<Offset, StorageError> {
         let messages_cf = self.cf("messages")?;
@@ -751,7 +753,7 @@ impl Storage for RocksStorage {
         Ok(next_offset)
     }
 
-    async fn cleanup_topic(&self, topic: &Topic, partition: Partition) -> Result<(), StorageError> {
+    async fn cleanup_topic(&self, topic: &Topic, partition: LogId) -> Result<(), StorageError> {
         let messages_cf = self.cf("messages")?;
 
         // Find all groups for this topic/partition
@@ -817,7 +819,7 @@ impl Storage for RocksStorage {
     async fn clear_inflight(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         offset: Offset,
     ) -> Result<(), StorageError> {
@@ -846,7 +848,7 @@ impl Storage for RocksStorage {
     async fn count_inflight(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
     ) -> Result<usize, StorageError> {
         let inflight_cf = self
@@ -892,7 +894,7 @@ impl Storage for RocksStorage {
     async fn is_inflight_or_acked(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         offset: Offset,
     ) -> Result<bool, StorageError> {
@@ -921,7 +923,7 @@ impl Storage for RocksStorage {
     async fn is_acked(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
         offset: Offset,
     ) -> Result<bool, StorageError> {
@@ -971,7 +973,7 @@ impl Storage for RocksStorage {
         Ok(topics.into_iter().collect())
     }
 
-    async fn list_groups(&self) -> Result<Vec<(Topic, Partition, Group)>, StorageError> {
+    async fn list_groups(&self) -> Result<Vec<(Topic, LogId, Group)>, StorageError> {
         let groups_cf = self
             .db
             .cf_handle("groups")
@@ -1010,7 +1012,7 @@ impl Storage for RocksStorage {
     async fn lowest_not_acked_offset(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
         group: &Group,
     ) -> Result<Offset, StorageError> {
         let messages_cf = self.cf("messages")?;
@@ -1120,7 +1122,7 @@ impl Storage for RocksStorage {
     // Stub: no action needed now, but design broker around explicit "state applies".
 }
 
-fn decode_inflight_key(key: &[u8]) -> Result<(Topic, Partition, Group, Offset), StorageError> {
+fn decode_inflight_key(key: &[u8]) -> Result<(Topic, LogId, Group, Offset), StorageError> {
     // topic: up to first 0
     let Some(z1) = key.iter().position(|&b| b == 0) else {
         return Err(StorageError::KeyDecode(

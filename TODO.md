@@ -1,12 +1,18 @@
-cleanups per crate deps?
-
 stats
 
 config
 
 tracing (no more prints..)
 
-Heartbeat?
+ack correct matching, tcp layer
+
+partitions nuke or adjust
+
+proper connection handling(heartbeat, ping pong, early dc detection)
+
+experiment with spreading delivered messages by making some consumers slower and see what happens
+
+better handling of batching slowdown when confirms not drained
 
 better error handling(return loud errors when failing to publish)
 
@@ -22,15 +28,11 @@ store next_offset durably per (topic, group)
 advance it only after mark_inflight_batch succeeds
 on restart, read it directly
 
-auth
-
 clusters (leader through shared networked storage initially, raft replication later?)
 
 admin/dashboard
 
 cli
-
-CLIENT (more than library, to play with)
 
 confirm stream(option, config) and test
 

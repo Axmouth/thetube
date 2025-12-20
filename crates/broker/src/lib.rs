@@ -2,15 +2,18 @@ pub mod coordination;
 
 use crossbeam::queue::SegQueue;
 use dashmap::DashMap;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::coordination::Coordination;
-use fibril_storage::{DeliverableMessage, Group, Offset, Partition, Storage, StorageError, Topic};
+use fibril_storage::{DeliverableMessage, Group, LogId, Offset, Storage, StorageError, Topic};
 use fibril_util::unix_millis;
 
 macro_rules! invariant {
@@ -145,7 +148,7 @@ pub struct ConsumerHandle {
     pub config: ConsumerConfig,
     pub group: Group,
     pub topic: Topic,
-    pub partition: Partition,
+    pub partition: LogId,
     // TODO: find way to make this complete not on channel deliver, but response sent
     pub messages: tokio::sync::mpsc::Receiver<DeliverableMessage>,
     // TODO: Should it be ack only or generally respond?
@@ -250,7 +253,7 @@ impl TaskGroup {
 
         // Drain deterministically
         while let Some(h) = self.handles.pop() {
-            let _ = h.await;
+            h.abort();
         }
     }
 }
@@ -261,12 +264,13 @@ pub struct Broker<C: Coordination + Send + Sync + 'static> {
     pub config: BrokerConfig,
     storage: Arc<dyn Storage>,
     coord: Arc<C>,
+    // TODO: Add partition to groups key for corrected and independent cursors
     groups: Arc<DashMap<(Topic, Group), Arc<GroupState>>>,
     topics: Arc<DashMap<Topic, ()>>,
-    batchers: Arc<DashMap<(Topic, Partition), mpsc::Sender<PublishRequest>>>,
+    batchers: Arc<DashMap<(Topic, LogId), mpsc::Sender<PublishRequest>>>,
     shutdown: CancellationToken,
     task_group: Arc<TaskGroup>,
-    recovered_cursors: Arc<DashMap<(Topic, Partition, Group), GroupCursor>>,
+    recovered_cursors: Arc<DashMap<(Topic, LogId, Group), GroupCursor>>,
     next_sub_id: AtomicU64,
 }
 
@@ -354,11 +358,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
         Ok(())
     }
 
-    pub async fn forced_cleanup(
-        &self,
-        topic: &Topic,
-        partition: Partition,
-    ) -> Result<(), BrokerError> {
+    pub async fn forced_cleanup(&self, topic: &Topic, partition: LogId) -> Result<(), BrokerError> {
         self.storage.cleanup_topic(topic, partition).await?;
         Ok(())
     }
@@ -472,6 +472,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
         group_state_arc
             .consumers
             .insert(consumer_id, msg_tx.clone());
+        group_state_arc.notify.notify_one();
 
         // Start delivery task once per (topic, group)
         if !group_state_arc
@@ -523,7 +524,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                             .collect();
 
                     if consumers.is_empty() {
-                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        group_state.notify.notified().await;
                         continue;
                     }
 
@@ -560,6 +561,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                             {
                                 drop(permit);
                                 group_state.consumers.remove(cid);
+                                group_state.notify.notify_one();
                             } else {
                                 inflight_batch.push((expired_off, new_deadline, permit));
                                 delivered_any_redelivery = true;
@@ -615,7 +617,6 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                     if delivered_any_redelivery {
                         // We delivered retries this iteration.
                         // Do NOT deliver fresh messages yet.
-                        tokio::task::yield_now().await;
                         continue;
                     }
 
@@ -632,16 +633,12 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                     };
 
                     while group_state.inflight_sem.available_permits() == 0 {
-                        tokio::select! {
-                            _ = group_state.notify.notified() => {}
-                            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
-                        }
+                        group_state.notify.notified().await;
                     }
                     let available = group_state.inflight_sem.available_permits();
 
                     // If anything became eligible for redelivery, do not fetch fresh.
                     if !group_state.redelivery.is_empty() {
-                        tokio::task::yield_now().await;
                         continue;
                     }
 
@@ -659,25 +656,21 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                         Ok(v) => v,
                         Err(err) => {
                             eprintln!("Error: {}", err);
-                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                             continue;
                         }
                     };
 
                     // do NOT fast-forward cursor if redelivery is pending
                     if !group_state.redelivery.is_empty() {
-                        tokio::task::yield_now().await;
                         continue;
                     }
 
                     if msgs.is_empty() {
                         // No messages available *right now*.
                         // Wait until something changes (publish, ack, or redelivery).
-                        tokio::select! {
-                            _ = group_state.notify.notified() => {}
-                            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
-                        }
 
+                        group_state.notify.notified().await;
                         continue;
                     }
 
@@ -751,6 +744,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                             drop(permit); // return capacity
                             // consumer dropped; remove and DO NOT advance cursor
                             group_state.consumers.remove(&consumers[idx].0);
+                            group_state.notify.notify_one();
                             break; // break out so we re-snapshot consumers next loop
                         }
 
@@ -784,7 +778,6 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                                 group_state.inflight_permits.remove(&offset);
                             }
                             // Important: do NOT advance further this iteration
-                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                         } else {
                             // Advance cursor ONLY AFTER durability
                             if let Some(off) = max_delivered {
@@ -808,6 +801,8 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                         inflight_batch.clear();
                     }
                 }
+
+                println!("Disconnect, Ending Sub");
             });
         }
 
@@ -965,7 +960,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                     Ok(v) => v,
                     Err(err) => {
                         eprintln!("Error: {}", err);
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
                         continue;
                     }
                 };
@@ -1030,11 +1025,12 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                     Ok(v) => v,
                     Err(err) => {
                         eprintln!("Error: {}", err);
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
                         continue;
                     }
                 };
 
+                // tokio::time::sleep(std::time::Duration::from_millis(3)).await;
                 tokio::task::yield_now().await;
             }
         });
@@ -1043,7 +1039,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
     async fn get_or_create_batcher(
         &self,
         topic: &Topic,
-        partition: Partition,
+        partition: LogId,
     ) -> mpsc::Sender<PublishRequest> {
         let key = (topic.clone(), partition);
 
@@ -1060,95 +1056,63 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
         }
     }
 
+    // NOTE: Fast processing partly depends on confirms being consumed quickly
     fn spawn_batcher(
         &self,
         topic: Topic,
-        partition: Partition,
+        partition: LogId,
         mut rx: mpsc::Receiver<PublishRequest>,
     ) {
         let storage = Arc::clone(&self.storage);
         let cfg = self.config.clone();
         let shutdown = self.shutdown.clone();
-
         let groups = self.groups.clone();
+
         self.task_group.spawn(async move {
-            let mut pending = Vec::<PublishRequest>::new();
-            let mut last_flush = tokio::time::Instant::now();
+            let mut pending: Vec<PublishRequest> = Vec::new();
+            let mut timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
 
             loop {
-                if shutdown.is_cancelled() {
-                    break;
-                }
-                // Try to get the next message WITHOUT waiting
-                match rx.try_recv() {
-                    Ok(msg) => {
-                        pending.push(msg);
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
 
-                        // If we reached batch_size -> flush immediately
-                        if pending.len() >= cfg.publish_batch_size {
-                            flush_publish_batch(
-                                &storage,
-                                groups.clone(),
-                                &topic,
-                                partition,
-                                &mut pending,
-                            )
-                            .await;
-                            last_flush = tokio::time::Instant::now();
+                    maybe = rx.recv() => {
+                        match maybe {
+                            Some(msg) => {
+                                pending.push(msg);
+
+                                // arm timer on first message
+                                if pending.len() == 1 {
+                                    timer = Some(Box::pin(tokio::time::sleep(
+                                        tokio::time::Duration::from_millis(cfg.publish_batch_timeout_ms)
+                                    )));
+                                }
+
+                                // size-based flush
+                                if pending.len() >= cfg.publish_batch_size {
+                                    flush_publish_batch(&storage, groups.clone(), &topic, partition, &mut pending).await;
+                                    timer = None;
+                                }
+                            }
+
+                            None => {
+                                // channel closed: flush remaining
+                                if !pending.is_empty() {
+                                    flush_publish_batch(&storage, groups.clone(), &topic, partition, &mut pending).await;
+                                }
+                                break;
+                            }
                         }
-
-                        continue; // go back to top, keep draining buffer
                     }
 
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                        // Queue is empty
+                    // timer-based flush
+                    _ = async { timer.as_mut().unwrap().as_mut().await }, if timer.is_some() => {
                         if !pending.is_empty() {
-                            // SMART FLUSH: Don't wait for timeout
-                            flush_publish_batch(
-                                &storage,
-                                groups.clone(),
-                                &topic,
-                                partition,
-                                &mut pending,
-                            )
-                            .await;
-                            last_flush = tokio::time::Instant::now();
+                            flush_publish_batch(&storage, groups.clone(), &topic, partition, &mut pending).await;
                         }
-                    }
-
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                        // Should almost never happen
-                        if !pending.is_empty() {
-                            flush_publish_batch(
-                                &storage,
-                                groups.clone(),
-                                &topic,
-                                partition,
-                                &mut pending,
-                            )
-                            .await;
-                        }
-                        return;
+                        timer = None;
                     }
                 }
-
-                // Timeout flush
-                if last_flush.elapsed().as_millis() > cfg.publish_batch_timeout_ms as u128 {
-                    if !pending.is_empty() {
-                        flush_publish_batch(
-                            &storage,
-                            groups.clone(),
-                            &topic,
-                            partition,
-                            &mut pending,
-                        )
-                        .await;
-                    }
-                    last_flush = tokio::time::Instant::now();
-                }
-
-                // Sleep a *tiny* amount so we don't busy-loop
-                tokio::task::yield_now().await;
             }
         });
     }
@@ -1180,7 +1144,10 @@ async fn flush_publish_batch(
         return;
     }
 
-    let payloads: Vec<Vec<u8>> = pending.iter().map(|r| r.payload.clone()).collect();
+    let payloads: Vec<Vec<u8>> = pending
+        .iter_mut()
+        .map(|r| std::mem::take(&mut r.payload))
+        .collect();
 
     let result = storage.append_batch(topic, partition, &payloads).await;
 

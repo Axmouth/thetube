@@ -6,7 +6,7 @@ members = [
     "crates/broker",
     "crates/fibril",
     "crates/tui-example",
-    "benches",
+    "benches", "crates/client",
 ]
 
 resolver = "2"
