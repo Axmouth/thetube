@@ -10,3 +10,7 @@ members = [
 ]
 
 resolver = "2"
+
+[workspace.metadata.sovereignty]
+ai-training = "prohibited"
+policy-url = "https://github.com/axmouth/fibril/blob/main/AI_POLICY.md"

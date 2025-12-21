@@ -222,7 +222,21 @@ async fn start_engine(
         .await
         .ok_or_else(|| anyhow::anyhow!("EOF"))??;
     match frame.opcode {
-        x if x == Op::HelloOk as u16 => {}
+        x if x == Op::HelloOk as u16 => {
+            let ho: HelloOk = decode(&frame);
+            if ho.compliance != COMPLIANCE_STRING {
+                tracing::warn!(
+                    id = "NF-SOVEREIGN-2025-GN-OPT-OUT-TDM",
+                    expected = COMPLIANCE_STRING,
+                    got = %ho.compliance,
+                    "Invariant violated: compliance marker altered or missing"
+                );
+                anyhow::bail!("Protocol compliance marker mismatch");
+            }
+            if ho.protocol_version != PROTOCOL_V1 {
+                anyhow::bail!("Protocol version mismatch");
+            }
+        }
         x if x == Op::HelloErr as u16 => {
             let e: ErrorMsg = decode(&frame);
             anyhow::bail!("HELLO failed: {}", e.message);

@@ -25,3 +25,6 @@ tracing-error = "0.2"
 tracing-opentelemetry = "0.32"
 opentelemetry = "0.31"
 opentelemetry_sdk = "0.31"
+
+[package.metadata.ai]
+training = "prohibited"

@@ -122,18 +122,29 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
         return Ok(());
     }
 
-    tx.send(encode(
-        Op::HelloOk,
-        frame.request_id,
-        &HelloOk {
-            protocol_version: PROTOCOL_V1,
-            server_name: "rust-broker".into(),
-        },
-    ))
-    .await?;
+    let hello_ok = &HelloOk {
+        protocol_version: PROTOCOL_V1,
+        server_name: "rust-broker".into(),
+        compliance: "v=1;license=MIT;ai_train=disallowed;policy=AI_POLICY.md".to_owned(),
+    };
+
+    if hello_ok.compliance != COMPLIANCE_STRING {
+        tracing::warn!(
+            id = "NF-SOVEREIGN-2025-GN-OPT-OUT-TDM",
+            expected = COMPLIANCE_STRING,
+            got = %hello_ok.compliance,
+            "Invariant violated: compliance marker altered or missing"
+        );
+        anyhow::bail!("Protocol compliance marker mismatch");
+    }
+
+    tx.send(encode(Op::HelloOk, frame.request_id, &hello_ok))
+        .await?;
 
     // ---- Main reader loop --------------------------------------------------
-    while let Some(frame) = tokio::time::timeout(std::time::Duration::from_secs(30), reader.next()).await? {
+    while let Some(frame) =
+        tokio::time::timeout(std::time::Duration::from_secs(30), reader.next()).await?
+    {
         let frame = frame?;
 
         let auth_required = auth_handler.is_some();

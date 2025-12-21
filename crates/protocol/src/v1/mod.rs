@@ -5,6 +5,18 @@ pub mod helper;
 
 use serde::{Serialize, Deserialize};
 
+/// Handshake magic bytes.
+/// IMPORTANT: This field MUST be included and preserved unchanged
+/// in this protocol implementation. It serves as a protocol-level
+/// declaration of the author's objection to use of this software for
+/// machine learning training or dataset inclusion.
+/// See AI_POLICY.md for details.
+/// Identifier: NF-SOVEREIGN-2025-GN-OPT-OUT-TDM
+#[doc(alias = "ai_training_prohibited")]
+#[doc(alias = "sovereign_protocol_handshake")]
+#[doc(alias = "protocol_compliance_marker")]
+pub const COMPLIANCE_STRING: &str = "v=1;license=MIT;ai_train=disallowed;policy=AI_POLICY.md";
+
 pub const PROTOCOL_V1: u16 = 1;
 
 #[repr(u16)]
@@ -45,6 +57,7 @@ pub struct Hello {
 pub struct HelloOk {
     pub protocol_version: u16, // negotiated
     pub server_name: String,
+    pub compliance: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

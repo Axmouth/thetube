@@ -1,0 +1,1 @@
+![AI Usage: Human Only](https://img.shields.io/badge/AI_Usage-Human_Only-blue?style=flat-square&link=./AI_POLICY.md)
