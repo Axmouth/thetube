@@ -673,7 +673,8 @@ impl Storage for RocksStorage {
             let Some(msg_val) = self.db.get_cf(&messages_cf, msg_key)? else {
                 // stale inflight entry pointing to a deleted/missing message
                 // don't poison the whole scan
-                eprintln!(
+                // TODO: handle better?
+                tracing::warn!(
                     "[WARN] stale inflight entry: topic={} partition={} group={} offset={} (message missing)",
                     topic, partition, group, offset
                 );
@@ -886,7 +887,7 @@ impl Storage for RocksStorage {
         if let Ok(meta_cf) = self.cf("meta") {
             let iter = self.db.iterator_cf(&meta_cf, IteratorMode::Start);
             for (key, _) in iter.flatten() {
-                eprintln!("META KEY = {:?}", String::from_utf8_lossy(&key));
+                tracing::info!("META KEY = {:?}", String::from_utf8_lossy(&key));
             }
         }
     }

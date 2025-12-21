@@ -2,9 +2,7 @@ stats
 
 config
 
-tracing (no more prints..)
-
-ack correct matching, tcp layer
+ack correct matching(sub id?), in tcp layer
 
 partitions nuke or adjust
 
@@ -15,6 +13,8 @@ experiment with spreading delivered messages by making some consumers slower and
 better handling of batching slowdown when confirms not drained
 
 better error handling(return loud errors when failing to publish)
+
+diagnostics queue/channel to allow sending up non fatal issues and tallying/observing them better?
 
 multiple brokers on same storage tests (must fail)
 

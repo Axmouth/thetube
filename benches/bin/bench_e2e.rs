@@ -12,6 +12,7 @@ use fibril_broker::{AckRequest, ConsumerConfig};
 use fibril_storage::make_rocksdb_store;
 
 use clap::{Parser, ValueEnum};
+use fibril_util::init_tracing;
 
 #[derive(Parser, Debug)]
 #[command(name = "fibril")]
@@ -238,7 +239,7 @@ async fn reporter(
     loop {
         ticker.tick().await;
         let acked = metrics.acked.load(Ordering::Relaxed);
-        println!(
+        tracing::info!(
             "pub={} conf={} inflight={} cons={} ack={} dup={} upper={}",
             metrics.published.load(Ordering::Relaxed),
             metrics.confirmed.load(Ordering::Relaxed),
@@ -343,22 +344,22 @@ async fn run_e2e_bench(cmd: E2EBench) {
     let con_ns = metrics.consume_done_at.load(Ordering::Relaxed);
     let ack_ns = metrics.ack_done_at.load(Ordering::Relaxed);
 
-    println!();
-    println!("=== FINAL THROUGHPUT ===");
+    tracing::info!("\n");
+    tracing::info!("=== FINAL THROUGHPUT ===");
 
     if pub_ns > 0 {
         let secs = pub_ns as f64 / 1e9;
-        println!("Published: {:.0} msg/s", total / secs);
+        tracing::info!("Published: {:.0} msg/s", total / secs);
     }
 
     if con_ns > 0 {
         let secs = con_ns as f64 / 1e9;
-        println!("Consumed:  {:.0} msg/s", total / secs);
+        tracing::info!("Consumed:  {:.0} msg/s", total / secs);
     }
 
     if ack_ns > 0 {
         let secs = ack_ns as f64 / 1e9;
-        println!("Acked:     {:.0} msg/s", total / secs);
+        tracing::info!("Acked:     {:.0} msg/s", total / secs);
     }
 
     broker.flush_storage().await.unwrap();
@@ -367,17 +368,19 @@ async fn run_e2e_bench(cmd: E2EBench) {
 
     broker_clone.dump_meta_keys().await;
 
-    println!("Bench complete.");
+    tracing::info!("Bench complete.");
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
+    init_tracing();
+
     let cmd = Command::parse();
 
     match cmd {
         Command::Bench(b) => match b.mode {
             BenchMode::E2E(e2e) => {
-                println!("Starting E2E bench: {:#?}", e2e);
+                tracing::info!("Starting E2E bench: {:#?}", e2e);
                 run_e2e_bench(e2e).await;
             }
         },

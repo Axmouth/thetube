@@ -626,7 +626,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                     let upper = match storage.current_next_offset(&topic_clone, partition).await {
                         Ok(v) => v,
                         Err(err) => {
-                            eprintln!("Error: {}", err);
+                            tracing::error!("Error: {}", err);
                             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                             continue;
                         }
@@ -655,7 +655,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                     {
                         Ok(v) => v,
                         Err(err) => {
-                            eprintln!("Error: {}", err);
+                            tracing::error!("Error: {}", err);
                             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                             continue;
                         }
@@ -802,7 +802,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                     }
                 }
 
-                println!("Disconnect, Ending Sub");
+                tracing::debug!("Disconnect, Ending Sub");
             });
         }
 
@@ -911,10 +911,9 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                 for topic in topics.iter() {
                     // TODO: Handle partition better
                     if let Err(err) = storage.cleanup_topic(&topic.key().to_string(), 0).await {
-                        eprintln!("Error in cleanup worker: {}", err);
+                        tracing::error!("Error in cleanup worker: {}", err);
                     } else {
-                        // TODO: Use logging (set level to warn for benches)
-                        // println!("Successfully cleaned up: {}", &topic.key())
+                        tracing::info!("Successfully cleaned up: {}", &topic.key())
                     }
                 }
             }
@@ -937,7 +936,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                 let hint = match storage.next_expiry_hint().await {
                     Ok(v) => v,
                     Err(err) => {
-                        eprintln!("Error: {}", err);
+                        tracing::error!("Error: {}", err);
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         continue;
                     }
@@ -959,7 +958,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                 let expired = match storage.list_expired(now).await {
                     Ok(v) => v,
                     Err(err) => {
-                        eprintln!("Error: {}", err);
+                        tracing::error!("Error: {}", err);
                         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
                         continue;
                     }
@@ -1024,7 +1023,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                 match storage.recompute_and_store_next_expiry_hint().await {
                     Ok(v) => v,
                     Err(err) => {
-                        eprintln!("Error: {}", err);
+                        tracing::error!("Error: {}", err);
                         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
                         continue;
                     }

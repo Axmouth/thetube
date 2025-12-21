@@ -1,3 +1,4 @@
+pub mod observable_storage;
 pub mod rocksdb_store;
 
 use async_trait::async_trait;

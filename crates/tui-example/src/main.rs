@@ -7,6 +7,7 @@ use crossterm::{
 use fibril_protocol::v1::{
     Auth, Deliver, ErrorMsg, Hello, HelloOk, Op, PROTOCOL_V1, Publish, Subscribe, SubscribeOk, frame::ProtoCodec, helper::Conn
 };
+use fibril_util::init_tracing;
 use futures::{SinkExt, StreamExt};
 use ratatui::{
     Terminal,
@@ -547,8 +548,8 @@ pub async fn visual_client(
 
     match frame.opcode {
         x if x == Op::HelloOk as u16 => {
-            let _ok: HelloOk = fibril_protocol::v1::helper::decode(&frame);
-            // println!("HELLO OK, negotiated protocol {}", ok.protocol_version);
+            let ok: HelloOk = fibril_protocol::v1::helper::decode(&frame);
+            tracing::debug!("HELLO OK, negotiated protocol {}", ok.protocol_version);
 
             let _ = vis_tx.send(VisualEvent::HelloOk { sub_id }).await;
         }
@@ -706,11 +707,11 @@ pub async fn visual_client(
 
     while let Some(frame) = stream.next().await {
         let frame = frame?;
-        // println!("Received frame with code {:?}", frame.opcode);
+        tracing::debug!("Received frame with code {:?}", frame.opcode);
         match frame.opcode {
             x if x == Op::Deliver as u16 => {
                 let d: Deliver = fibril_protocol::v1::helper::decode(&frame);
-                // println!("CLIENT got DELIVER offset={}", d.offset);
+                tracing::debug!("CLIENT got DELIVER offset={}", d.offset);
                 let _ = vis_tx
                     .send(VisualEvent::Deliver {
                         sub_id,
@@ -720,7 +721,7 @@ pub async fn visual_client(
             }
             x if x == Op::Error as u16 => {
                 let e: ErrorMsg = fibril_protocol::v1::helper::decode(&frame);
-                // println!("CLIENT got ErrorMsg code={} msg='{}'", e.code, e.message);
+                tracing::debug!("CLIENT got ErrorMsg code={} msg='{}'", e.code, e.message);
                 let _ = vis_tx
                     .send(VisualEvent::ErrorMsg {
                         sub_id,
@@ -742,6 +743,8 @@ async fn connect_to_server() -> anyhow::Result<Conn> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing();
+
     let (tx, rx) = mpsc::channel(1000);
 
     execute!(stdout(), Clear(ClearType::All))?;

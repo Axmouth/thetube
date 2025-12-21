@@ -4,6 +4,7 @@ use fibril_broker::{Broker, BrokerConfig, coordination::NoopCoordination};
 use fibril_storage::make_rocksdb_store;
 
 use clap::Parser;
+use fibril_util::init_tracing;
 use tokio::time::Instant;
 
 /// Benchmark publisher load.
@@ -40,6 +41,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    init_tracing();
+
     let args = Args::parse();
 
     // Set up config
@@ -59,8 +62,8 @@ async fn main() {
             .unwrap(),
     );
 
-    println!("Benchmark: Publishing {} messages...", args.messages);
-    println!(
+    tracing::info!("Benchmark: Publishing {} messages...", args.messages);
+    tracing::info!(
         "parallel={}, batch_size={}, timeout={}ms, max_payload={}",
         args.parallelism, args.batch_size, args.batch_timeout_ms, args.max_payload
     );
@@ -94,7 +97,7 @@ async fn main() {
             }
 
             let finish_time = Instant::now();
-            println!(
+            tracing::info!(
                 "Publisher confirmed {} messages in {:.2} seconds",
                 confirmed,
                 (finish_time - start).as_secs_f64()
@@ -109,6 +112,6 @@ async fn main() {
     let elapsed = start.elapsed().as_secs_f64();
     let rate = (args.messages as f64) / elapsed;
 
-    println!("Total time: {:.2} s", elapsed);
-    println!("Throughput: {:.2} messages/sec", rate);
+    tracing::info!("Total time: {:.2} s", elapsed);
+    tracing::info!("Throughput: {:.2} messages/sec", rate);
 }

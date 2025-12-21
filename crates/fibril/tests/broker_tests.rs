@@ -1690,7 +1690,7 @@ async fn prefetch_limits_inflight() -> anyhow::Result<()> {
         match res {
             Ok(Some(m)) => {
                 extra += 1;
-                println!("extra recv offset={}", m.message.offset);
+                tracing::info!("extra recv offset={}", m.message.offset);
             }
             _ => break,
         }

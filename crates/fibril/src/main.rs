@@ -1,3 +1,7 @@
+use fibril_util::init_tracing;
+
 fn main() {
-    println!("Hello, world!");
+    init_tracing();
+
+    tracing::info!("Hello, world!");
 }

@@ -20,28 +20,28 @@ async fn main() -> anyhow::Result<()> {
 
     let ConsumerHandle {mut messages, ..} = consumer;
 
-    println!("consumer started");
+    tracing::info!("consumer started");
 let handle = tokio::spawn(async move {
     while let Some(msg) = messages.recv().await {
                 // intentionally do nothing
                 let tag = msg.delivery_tag;
-                print!("{}", tag);
+                tracing::info!("{}", tag);
             }
 });
 
-    let (publisher, confstream) = broker.get_publisher("topic").await?;
+    let (publisher, _confstream) = broker.get_publisher("topic").await?;
 
     for i in 0..1000 {
         publisher.publish(vec![0; 1024 + i]).await?;
     }
 
-    println!("sleeping");
+    tracing::info!("sleeping");
 
     tokio::time::sleep(Duration::from_secs(30)).await;
 handle.abort();
 
     // drop(messages);
-    println!("consumer dropped, sleeping");
+    tracing::info!("consumer dropped, sleeping");
 
     Ok(())
 }

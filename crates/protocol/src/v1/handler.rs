@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use crate::v1::{
     frame::{Frame, ProtoCodec},
@@ -29,12 +29,12 @@ struct SubState {
 }
 
 pub async fn run_server<C: Coordination + Send + Sync + 'static>(
-    addr: &str,
+    addr: SocketAddr,
     broker: Arc<Broker<C>>,
     auth: Option<impl AuthHandler + Send + Sync + Clone + 'static>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    println!("listening on {}", addr);
+    tracing::info!("listening on {}", addr);
 
     loop {
         let (socket, peer) = listener.accept().await?;
@@ -43,7 +43,7 @@ pub async fn run_server<C: Coordination + Send + Sync + 'static>(
         let auth = auth.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(socket, broker, auth).await {
-                eprintln!("conn {} error: {:?}", peer, e);
+                tracing::error!("conn {} error: {:?}", peer, e);
             }
         });
     }
@@ -64,20 +64,20 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
 
     // ---- Writer task -------------------------------------------------------
     let writer_task = tokio::spawn(async move {
-        eprintln!("[writer] START");
+        tracing::debug!("[writer] START");
 
         while let Some(frame) = rx.recv().await {
-            println!(
+            tracing::debug!(
                 "[writer] Writing Frame to tcp socket.. code={}",
                 frame.opcode
             );
             if let Err(err) = writer.send(frame).await {
-                eprintln!("[writer] Error writing to tcp socket : {err}");
+                tracing::error!("[writer] Error writing to tcp socket : {err}");
                 break;
             }
         }
 
-        eprintln!("[writer] EXIT");
+        tracing::debug!("[writer] EXIT");
     });
 
     // ---- Connection state --------------------------------------------------
@@ -261,12 +261,12 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                             payload: msg.message.payload.clone(),
                         };
 
-                        println!("Sending Deliver");
+                        tracing::debug!("Sending Deliver");
 
                         // 1. Try to write to socket
                         if let Err(err) = tx_clone.send(encode(Op::Deliver, 0, &deliver)).await {
                             // Socket dead -> do NOT auto-ack
-                            eprintln!("Failed to send to socket writer : {err}");
+                            tracing::error!("Failed to send to socket writer : {err}");
                             break;
                         }
 
@@ -380,7 +380,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
         sub.task.abort();
     }
 
-    eprintln!("[conn] EXIT handle_connection peer={:?}", peer_addr);
+    tracing::debug!("[conn] EXIT handle_connection peer={:?}", peer_addr);
 
     Ok(())
 }

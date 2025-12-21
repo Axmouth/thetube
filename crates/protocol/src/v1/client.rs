@@ -24,7 +24,7 @@ pub async fn demo_client(mut conn: Conn) -> anyhow::Result<()> {
     match frame.opcode {
         x if x == Op::HelloOk as u16 => {
             let ok: HelloOk = decode(&frame);
-            println!("negotiated v{}", ok.protocol_version);
+            tracing::debug!("negotiated v{}", ok.protocol_version);
         }
         x if x == Op::HelloErr as u16 => {
             return Err(anyhow::anyhow!("hello rejected"));
@@ -56,7 +56,7 @@ pub async fn demo_client(mut conn: Conn) -> anyhow::Result<()> {
         match frame.opcode {
             x if x == Op::Deliver as u16 => {
                 let d: Deliver = decode(&frame);
-                println!("DELIVER off={} bytes={}", d.offset, d.payload.len());
+                tracing::debug!("DELIVER off={} bytes={}", d.offset, d.payload.len());
 
                 // Ack single (or batch later)
                 conn.send(encode(Op::Ack, next_req_id(), &Ack {
@@ -68,11 +68,11 @@ pub async fn demo_client(mut conn: Conn) -> anyhow::Result<()> {
             }
             x if x == Op::PublishOk as u16 => {
                 let ok: PublishOk = decode(&frame);
-                println!("PUBLISH_OK offset={}", ok.offset);
+                tracing::debug!("PUBLISH_OK offset={}", ok.offset);
             }
             x if x == Op::Error as u16 => {
                 let e: ErrorMsg = decode(&frame);
-                eprintln!("ERROR {}: {}", e.code, e.message);
+                tracing::error!("ERROR {}: {}", e.code, e.message);
             }
             _ => {}
         }

@@ -9,4 +9,13 @@ fastrand = "2"
 futures = "0.3"
 thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
-
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [
+    "fmt",
+    "env-filter",
+    "json",
+] }
+tracing-error = "0.2"
+tracing-opentelemetry = "0.32"
+opentelemetry = "0.31"
+opentelemetry_sdk = "0.31"

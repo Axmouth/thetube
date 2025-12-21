@@ -70,6 +70,7 @@ enum Waiter {
 // ===== Client API =============================================================
 
 impl Client {
+    /// Connect to a server socket.
     pub async fn connect(addr: &str, opts: ClientOptions) -> anyhow::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
         let framed = Framed::new(stream, ProtoCodec);
@@ -78,6 +79,7 @@ impl Client {
         Ok(Client { engine })
     }
 
+    /// Get a handle that you can use to publish messages to a specific topic.
     pub fn publisher(&self, topic: impl Into<String>) -> Publisher {
         Publisher {
             engine: self.engine.clone(),
@@ -85,11 +87,15 @@ impl Client {
         }
     }
 
+    /// Subscribe to receive messages from a topic, with manual acknowledgements.
+    /// Messages must be acked explicitly; otherwise they may be redelivered.
     pub async fn subscribe(&self, req: Subscribe) -> anyhow::Result<Subscription> {
         let rx: Receiver<AckableMessage> = self.engine.subscribe(req).await?;
         Ok(Subscription { rx })
     }
 
+    /// Subscribe to receive messages from a topic, with automatic acknowledgements.
+    /// Messages that have been received by the client will not be redelivered.
     pub async fn subscribe_acked(&self, req: Subscribe) -> anyhow::Result<AutoAckedSubscription> {
         let rx: Receiver<Message> = self.engine.subscribe_auto_ack(req).await?;
         Ok(AutoAckedSubscription { rx })
@@ -253,7 +259,7 @@ async fn start_engine(
 
     // writer + reader loop
     tokio::spawn(async move {
-        let mut next_req = 10u64;
+        let mut next_req = 1u64;
         let mut waiters: HashMap<u64, Waiter> = HashMap::new();
 
         loop {
@@ -317,13 +323,15 @@ async fn start_engine(
                                 Some(_other) => {
                                     // protocol violation: PublishOk for non-publish request
                                     // log + drop
-                                    eprintln!("Internal error: Wrong request/response match")
+                                    // TODO
+                                    tracing::error!("Internal error: Wrong request/response match")
                                 }
                                 None => {
                                     // unexpected PublishOk (fire-and-forget or stale)
                                     // log + drop
                                     // Server must not send PublishOk unless require_confirm = true.
-                                    eprintln!("Internal error: unexpected PublishOk")
+                                    // TODO
+                                    tracing::error!("Internal error: unexpected PublishOk")
                                 }
                             }
                         }
@@ -394,7 +402,8 @@ async fn start_engine(
 
                                     _ => {
                                         // protocol violation: SubscribeOk for non-subscribe request_id
-                                        eprintln!("Internal error: protocol violation: SubscribeOk for non-subscribe request_id")
+                                        // TODO
+                                        tracing::error!("Internal error: protocol violation: SubscribeOk for non-subscribe request_id")
                                     }
                                 }
                             }

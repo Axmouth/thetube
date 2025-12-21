@@ -1,5 +1,6 @@
 use fibril_storage::Storage;
 use fibril_storage::rocksdb_store::RocksStorage;
+use fibril_util::init_tracing;
 use std::time::Instant;
 
 const ITERATIONS: usize = 2_000_000;
@@ -15,6 +16,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_bench(max_msg_size: usize) -> anyhow::Result<()> {
+    init_tracing();
+
     let messages = (0..ITERATIONS)
         .map(|_| {
             let size = fastrand::usize(32..max_msg_size);
@@ -34,7 +37,7 @@ async fn run_bench(max_msg_size: usize) -> anyhow::Result<()> {
         store.append(&"t".into(), 0, &buf).await?;
     }
 
-    println!(
+    tracing::info!(
         "append/sec = {}, max msg size = {} bytes",
         ITERATIONS as f64 / start.elapsed().as_secs_f64(),
         max_msg_size
