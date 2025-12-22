@@ -1,14 +1,12 @@
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
-    sync::{Arc, atomic::Ordering},
+    sync::Arc,
 };
 
 use fibril_broker::{Broker, BrokerConfig, coordination::NoopCoordination};
+use fibril_metrics::{Metrics, MetricsConfig};
 use fibril_protocol::v1::{AuthHandler, handler::run_server};
-use fibril_storage::{
-    observable_storage::{ObservableStorage, StorageStats},
-    rocksdb_store::RocksStorage,
-};
+use fibril_storage::{observable_storage::ObservableStorage, rocksdb_store::RocksStorage};
 use fibril_util::init_tracing;
 
 #[tokio::main]
@@ -17,42 +15,41 @@ async fn main() -> anyhow::Result<()> {
 
     // TODO configurable stuff
     let storage = RocksStorage::open("test_data/server", true)?;
-    let stats = StorageStats::new();
-    let stats_clone = Arc::clone(&stats);
-    let observable_storage = ObservableStorage::new(storage, stats);
+    let metrics = Metrics::new(3 * 60 * 60); // 3 hours
+    let observable_storage = ObservableStorage::new(storage, metrics.storage());
     let coord = NoopCoordination;
-    let broker =
-        Arc::new(Broker::try_new(observable_storage, coord, BrokerConfig::default()).await?);
+    let broker = Arc::new(
+        Broker::try_new(
+            observable_storage,
+            coord,
+            metrics.broker(),
+            BrokerConfig {
+                ack_batch_timeout_ms: 2,
+                ack_batch_size: 128,
+                ..BrokerConfig::default()
+            },
+        )
+        .await?,
+    );
     let auth_handler = StaticAuthHandler {
         username: "fibril",
         password: "fibril",
     };
 
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-            let writes_1m = stats_clone.writes.ops.sum_last(60);
-            let reads_1m = stats_clone.reads.ops.sum_last(60);
-
-            let total_writes = stats_clone.writes.total.load(Ordering::Relaxed);
-            let total_reads = stats_clone.reads.total.load(Ordering::Relaxed);
-
-            tracing::info!(
-                "[storage] writes/s(1m): {:.1}, reads/s(1m): {:.1}, total_writes: {}",
-                writes_1m as f64 / 60.0,
-                reads_1m as f64 / 60.0,
-                total_writes,
-            );
-        }
-    });
-
-    run_server(
+    let server_fut = run_server(
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from([0, 0, 0, 0]), 9876)),
         broker,
+        metrics.tcp(),
         Some(auth_handler),
-    )
-    .await?;
+    );
+
+    metrics.start(MetricsConfig {
+        log_broker: true,
+        log_storage: true,
+        log_tcp: true,
+    });
+
+    server_fut.await?;
 
     Ok(())
 }

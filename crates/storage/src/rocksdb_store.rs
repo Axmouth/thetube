@@ -13,7 +13,29 @@ pub struct RocksStorage {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
     sync_write: bool,
 }
+struct GroupKeyPrefix {
+    bytes: Vec<u8>,
+}
 
+impl GroupKeyPrefix {
+    fn new(topic: &Topic, partition: LogId, group: &Group) -> Self {
+        let mut v = Vec::with_capacity(
+            topic.len() + group.len() + 1 + 4 + 1
+        );
+        v.extend_from_slice(topic.as_bytes());
+        v.push(0);
+        v.extend_from_slice(&partition.to_be_bytes());
+        v.extend_from_slice(group.as_bytes());
+        v.push(0);
+        Self { bytes: v }
+    }
+
+    fn encode(&self, offset: Offset, buf: &mut Vec<u8>) {
+        buf.clear();
+        buf.extend_from_slice(&self.bytes);
+        buf.extend_from_slice(&offset.to_be_bytes());
+    }
+}
 
 // TODO: Use spawn blocking or equivalent?
 impl RocksStorage {
@@ -40,11 +62,10 @@ impl RocksStorage {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
-        // TODO: based on num CPUs?
         opts.set_max_background_jobs(bg_jobs);
         opts.set_enable_pipelined_write(true);
         // TODO: Configurable?
-        opts.set_write_buffer_size(128 * 1024 * 1024); // 64MB
+        opts.set_write_buffer_size(128 * 1024 * 1024); // 128MB
         opts.set_max_write_buffer_number(3);
         opts.set_min_write_buffer_number_to_merge(2);
 
@@ -552,10 +573,11 @@ impl Storage for RocksStorage {
 
         // Track min deadline in this batch
         let mut min_deadline = u64::MAX;
-
+        let prefix = GroupKeyPrefix::new(topic, partition, group);
+        let mut key = Vec::with_capacity(prefix.bytes.len() + 8);
         for (offset, deadline) in entries {
-            let key = Self::encode_group_key(topic, partition, group, *offset);
-            batch.put_cf(&inflight_cf, key, deadline.to_be_bytes());
+            prefix.encode(*offset, &mut key);
+            batch.put_cf(&inflight_cf, &key, deadline.to_be_bytes());
             min_deadline = min_deadline.min(*deadline);
         }
 
@@ -635,6 +657,7 @@ impl Storage for RocksStorage {
         // for off in v { ... }
 
         for &offset in offsets {
+            // TODO: precompute part with first 3?
             let key = Self::encode_group_key(topic, partition, group, offset);
 
             // Idempotent:
@@ -797,6 +820,7 @@ impl Storage for RocksStorage {
         let mut min_unacked = u64::MAX;
 
         for g in groups {
+            // TODO: evaluate unacked instead and not clean inflight?
             let unacked = self.lowest_not_acked_offset(topic, partition, &g).await?;
             if unacked < min_unacked {
                 min_unacked = unacked;

@@ -9,6 +9,7 @@ use anyhow::Context;
 use fibril_broker::{
     AckRequest, Broker, ConsumerConfig, ConsumerHandle, coordination::Coordination,
 };
+use fibril_metrics::TcpStats;
 use fibril_storage::{Group, LogId, Topic};
 use futures::{SinkExt, StreamExt};
 use tokio::{net::TcpListener, sync::mpsc};
@@ -31,6 +32,7 @@ struct SubState {
 pub async fn run_server<C: Coordination + Send + Sync + 'static>(
     addr: SocketAddr,
     broker: Arc<Broker<C>>,
+    metrics: Arc<TcpStats>,
     auth: Option<impl AuthHandler + Send + Sync + Clone + 'static>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
@@ -38,11 +40,13 @@ pub async fn run_server<C: Coordination + Send + Sync + 'static>(
 
     loop {
         let (socket, peer) = listener.accept().await?;
+        metrics.connection_opened();
         let broker = broker.clone();
 
         let auth = auth.clone();
+        let metrics = metrics.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, broker, auth).await {
+            if let Err(e) = handle_connection(socket, broker, metrics.clone(), auth).await {
                 tracing::error!("conn {} error: {:?}", peer, e);
             }
         });
@@ -52,6 +56,7 @@ pub async fn run_server<C: Coordination + Send + Sync + 'static>(
 pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     socket: tokio::net::TcpStream,
     broker: Arc<Broker<C>>,
+    metrics: Arc<TcpStats>,
     auth_handler: Option<impl AuthHandler + Send + Sync>,
 ) -> anyhow::Result<()> {
     // ---- Framed socket -----------------------------------------------------
@@ -62,18 +67,24 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     // ---- Write fan-in channel ---------------------------------------------
     let (tx, mut rx) = mpsc::channel::<Frame>(256);
 
+    let metrics_clone = metrics.clone();
     // ---- Writer task -------------------------------------------------------
     let writer_task = tokio::spawn(async move {
         tracing::debug!("[writer] START");
 
+        let metrics = metrics_clone.clone();
         while let Some(frame) = rx.recv().await {
             tracing::debug!(
                 "[writer] Writing Frame to tcp socket.. code={}",
                 frame.opcode
             );
+            let size = size_of_val(&frame) + frame.payload.len();
             if let Err(err) = writer.send(frame).await {
+                metrics.error();
                 tracing::error!("[writer] Error writing to tcp socket : {err}");
                 break;
+            } else {
+                metrics.bytes_out(size as u64);
             }
         }
 
@@ -103,6 +114,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
         ))
         .await
         .ok();
+        metrics.error();
         return Ok(());
     }
 
@@ -119,6 +131,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
         ))
         .await
         .ok();
+        metrics.error();
         return Ok(());
     }
 
@@ -128,6 +141,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
         compliance: "v=1;license=MIT;ai_train=disallowed;policy=AI_POLICY.md".to_owned(),
     };
 
+    // TODO: Two ways handshake?
     if hello_ok.compliance != COMPLIANCE_STRING {
         tracing::warn!(
             id = "NF-SOVEREIGN-2025-GN-OPT-OUT-TDM",
@@ -145,7 +159,10 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     while let Some(frame) =
         tokio::time::timeout(std::time::Duration::from_secs(30), reader.next()).await?
     {
+        let metrics = metrics.clone();
         let frame = frame?;
+        let size = size_of_val(&frame) + frame.payload.len();
+        metrics.bytes_in(size as u64);
 
         let auth_required = auth_handler.is_some();
         let is_auth = frame.opcode == Op::Auth as u16;
@@ -161,6 +178,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                 },
             ))
             .await?;
+            metrics.error();
 
             break; // close connection
         }
@@ -178,6 +196,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                         },
                     ))
                     .await?;
+                    metrics.error();
                 } else if auth_handler.is_none() {
                     tx.send(encode(
                         Op::AuthErr,
@@ -188,6 +207,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                         },
                     ))
                     .await?;
+                    metrics.error();
                 } else {
                     // ---- AUTH handshake -------------------------------------
                     if let Some(auth_handler) = &auth_handler {
@@ -210,6 +230,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                                 },
                             ))
                             .await?;
+                            metrics.error();
 
                             break; // close connection
                         }
@@ -233,6 +254,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                         },
                     ))
                     .await?;
+                    metrics.error();
                     continue;
                 }
 
@@ -278,6 +300,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                         if let Err(err) = tx_clone.send(encode(Op::Deliver, 0, &deliver)).await {
                             // Socket dead -> do NOT auto-ack
                             tracing::error!("Failed to send to socket writer : {err}");
+                            metrics.error();
                             break;
                         }
 
@@ -359,6 +382,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                             },
                         ))
                         .await?;
+                        metrics.error();
                     }
                 }
             }
@@ -379,6 +403,7 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
                     },
                 ))
                 .await?;
+                metrics.error();
             }
         }
     }
@@ -393,5 +418,6 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
 
     tracing::debug!("[conn] EXIT handle_connection peer={:?}", peer_addr);
 
+    metrics.connection_closed();
     Ok(())
 }

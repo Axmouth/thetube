@@ -1,12 +1,14 @@
 [workspace]
 members = [
     "crates/util",
+    "crates/client",
     "crates/protocol",
     "crates/storage",
     "crates/broker",
     "crates/fibril",
+    "crates/metrics",
     "crates/tui-example",
-    "benches", "crates/client",
+    "benches",
 ]
 
 resolver = "2"

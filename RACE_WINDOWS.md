@@ -1,3 +1,5 @@
+(TODO: Deprecated, Review again)
+
 # ## Known race windows
 
 What remains are **subtle but real**.

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use fibril_broker::{Broker, BrokerConfig, coordination::NoopCoordination};
+use fibril_metrics::Metrics;
 use fibril_storage::make_rocksdb_store;
 
 use clap::Parser;
@@ -55,9 +56,10 @@ async fn main() {
     // RocksDB setup
     std::fs::create_dir_all(&args.db_path).unwrap();
     let storage = make_rocksdb_store(&args.db_path, args.sync_write).unwrap();
+    let metrics = Metrics::new(60 * 60);
 
     let broker = Arc::new(
-        Broker::try_new(storage, NoopCoordination {}, cfg)
+        Broker::try_new(storage, NoopCoordination {}, metrics.broker(), cfg)
             .await
             .unwrap(),
     );

@@ -15,10 +15,12 @@ path = "bin/server2.rs"
 fibril-broker = { path = "../broker" }
 fibril-protocol = { path = "../protocol" }
 fibril-storage = { path = "../storage" }
+fibril-metrics = { path = "../metrics" }
 fibril-util = { path = "../util" }
 anyhow = "1.0"
 async-trait = "0.1"
 fastrand = "2"
+futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-error = "0.2"

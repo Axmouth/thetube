@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 fibril-broker = { path = "../broker" }
 fibril-storage = { path = "../storage" }
+fibril-metrics = { path = "../metrics" }
 fibril-util = { path = "../util" }
 anyhow = "1.0"
 async-trait = "0.1"

@@ -1,4 +1,5 @@
 use fibril_broker::{BrokerConfig, ConsumerHandle, coordination::NoopCoordination};
+use fibril_metrics::Metrics;
 use fibril_storage::rocksdb_store::RocksStorage;
 
 #[tokio::main]
@@ -7,7 +8,8 @@ async fn main() -> anyhow::Result<()> {
     use std::{sync::Arc, time::Duration};
     let storage = RocksStorage::open("test_data/server2", true)?;
     let coord = NoopCoordination;
-    let broker = Arc::new(Broker::try_new(storage, coord, BrokerConfig::default()).await?);
+    let metrics = Metrics::new(3 * 60 * 60); // 3 hours
+    let broker = Arc::new(Broker::try_new(storage, coord, metrics.broker(), BrokerConfig::default()).await?);
 
     let consumer = broker
         .subscribe(

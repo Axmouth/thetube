@@ -84,7 +84,7 @@ fn random_idle_duration() -> Duration {
 
 fn random_burst_size() -> usize {
     // 1–8 messages per burst
-    fastrand::usize(1..=8)
+    fastrand::usize(1..=800)
 }
 
 fn random_inter_message_delay() -> Duration {
@@ -749,7 +749,7 @@ async fn main() -> anyhow::Result<()> {
 
     execute!(stdout(), Clear(ClearType::All))?;
     execute!(stdout(), cursor::Hide)?;
-    for i in 0..3 {
+    for i in 0..9 {
         let conn = connect_to_server().await?;
         let tx = tx.clone();
         tokio::spawn(visual_client(conn, i, 100 + i, tx));

@@ -1,6 +1,10 @@
-stats
+more cleanup tests
+
+cleanup leftover inflight without message (or better figure why it happens)
 
 config
+
+Handshake two way
 
 ack correct matching(sub id?), in tcp layer
 
@@ -21,6 +25,8 @@ multiple brokers on same storage tests (must fail)
 shutdown stops publishing immediately, tries to drain inflight, ensure no late ack flushes race, ensure batchers drain once
 
 define a formal delivery state machine (very useful later)?
+
+better backpressure on publish(related to storage limits too?)
 
 Persist a delivery cursor
 Instead of inferring:

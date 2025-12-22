@@ -479,9 +479,11 @@ dependencies = [
  "async-trait",
  "fastrand",
  "fibril-broker",
+ "fibril-metrics",
  "fibril-protocol",
  "fibril-storage",
  "fibril-util",
+ "futures",
  "opentelemetry",
  "opentelemetry_sdk",
  "tokio",
@@ -500,6 +502,7 @@ dependencies = [
  "dashmap",
  "fastrand",
  "fibril-broker",
+ "fibril-metrics",
  "fibril-storage",
  "fibril-util",
  "thiserror",
@@ -519,6 +522,7 @@ dependencies = [
  "crossbeam",
  "dashmap",
  "fastrand",
+ "fibril-metrics",
  "fibril-storage",
  "fibril-util",
  "futures",
@@ -552,6 +556,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fibril-metrics"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dashmap",
+ "fibril-util",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "fibril-protocol"
 version = "0.1.0"
 dependencies = [
@@ -560,6 +581,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "fibril-broker",
+ "fibril-metrics",
  "fibril-storage",
  "fibril-util",
  "futures",
@@ -579,6 +601,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
+ "fibril-metrics",
  "fibril-util",
  "rocksdb",
  "thiserror",

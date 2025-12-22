@@ -9,7 +9,8 @@ use std::{
 use fibril_broker::coordination::NoopCoordination;
 use fibril_broker::{Broker, BrokerConfig, ConsumerHandle};
 use fibril_broker::{AckRequest, ConsumerConfig};
-use fibril_storage::make_rocksdb_store;
+use fibril_metrics::{Metrics, MetricsConfig};
+use fibril_storage::{make_rocksdb_store, observable_storage::ObservableStorage};
 
 use clap::{Parser, ValueEnum};
 use fibril_util::init_tracing;
@@ -100,7 +101,7 @@ fn decode_payload(buf: &[u8]) -> (u64, u32) {
     (msg_id, producer)
 }
 
-struct Metrics {
+struct BenchMetrics {
     published: AtomicU64,
     confirmed: AtomicU64,
     consumed: AtomicU64,
@@ -115,7 +116,7 @@ struct Metrics {
     ack_done_at: AtomicU64,
 }
 
-impl Metrics {
+impl BenchMetrics {
     fn new() -> Self {
         Self {
             published: AtomicU64::new(0),
@@ -145,7 +146,7 @@ async fn producer_task(
     start_id: u64,
     count: u64,
     inflight_limit: usize,
-    metrics: Arc<Metrics>,
+    metrics: Arc<BenchMetrics>,
 ) {
     let (publisher, mut confirm_stream) = broker.get_publisher(&topic).await.unwrap();
 
@@ -183,7 +184,7 @@ async fn producer_task(
 async fn consumer_task(
     mut consumer: ConsumerHandle,
     ack_mode: AckMode,
-    metrics: Arc<Metrics>,
+    metrics: Arc<BenchMetrics>,
     total: u64,
 ) {
     let (ackq_tx, mut ackq_rx) = tokio::sync::mpsc::channel::<u64>(10_000);
@@ -227,7 +228,7 @@ async fn consumer_task(
 }
 
 async fn reporter(
-    metrics: Arc<Metrics>,
+    metrics: Arc<BenchMetrics>,
     broker: Arc<Broker<NoopCoordination>>,
     topic: String,
     interval: u64,
@@ -261,7 +262,9 @@ async fn make_broker_with_cfg(cmd: &E2EBench) -> Broker<NoopCoordination> {
         publish_batch_size: cmd.batch_size,
         publish_batch_timeout_ms: cmd.batch_timeout_ms,
         ack_batch_size: 512,
-        ack_batch_timeout_ms: 1,
+        ack_batch_timeout_ms: 20,
+        inflight_batch_size: 512,
+        inflight_batch_timeout_ms: 20,
         inflight_ttl_secs: 60,
         cleanup_interval_secs: 5,
         ..Default::default()
@@ -275,9 +278,19 @@ async fn make_broker_with_cfg(cmd: &E2EBench) -> Broker<NoopCoordination> {
     std::fs::create_dir_all(&db_path).unwrap();
 
     let store = make_rocksdb_store(&db_path, cmd.sync_write).unwrap();
+    let metrics = Metrics::new(60 * 60);
+    let store = ObservableStorage::new(store, metrics.storage());
     let coord = NoopCoordination {};
 
-    Broker::try_new(store, coord, cfg).await.unwrap()
+    let broker = Broker::try_new(store, coord, metrics.broker(), cfg).await.unwrap();
+
+    metrics.start(MetricsConfig {
+        log_broker: true,
+        log_storage: true,
+        log_tcp: false,
+    });
+
+    broker
 }
 
 async fn run_e2e_bench(cmd: E2EBench) {
@@ -285,7 +298,7 @@ async fn run_e2e_bench(cmd: E2EBench) {
     let broker = Arc::new(broker);
     let broker_clone = broker.clone();
 
-    let metrics = Arc::new(Metrics::new());
+    let metrics = Arc::new(BenchMetrics::new());
 
     let topic = format!("bench_topic_{}", fastrand::u64(..));
 
