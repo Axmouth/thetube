@@ -1,0 +1,47 @@
+a, a:visited {
+  color: #4dabf7;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #74c0fc;
+  text-decoration: underline;
+}
+
+header {
+  backdrop-filter: blur(6px);
+  background: rgba(15,20,26,.85);
+}
+
+footer {
+  opacity: .65;
+  margin-top: 40px;
+  padding: 32px;
+  text-align: center;
+}
+
+main {
+  max-width: 1200px;
+  margin: 32px auto;
+}
+
+.metrics-header {
+    margin-left: 12.5%;
+}
+
+.metric-table {
+    max-width: 75%;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.metric-table td:first-child {
+  opacity: .75;
+}
+
+.metric-table td:last-child {
+  font-weight: 600;
+  text-align: right;
+}
+
+

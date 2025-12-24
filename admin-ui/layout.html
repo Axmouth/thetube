@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{title}}</title>
+  <link rel="stylesheet" href="/static/vendor/clarity/global.min.css">
+  <link rel="stylesheet" href="/static/vendor/clarity/clr-ui.min.css">
+  <link rel="stylesheet" href="/static/vendor/clarity/theme.dark.min.css">
+  <link rel="stylesheet" href="/static/vendor/clarity/clarity-icons.min.css">
+  <script src="/static/vendor/clarity/custom-elements.min.js"></script>
+  <script src="/static/vendor/clarity/clarity-icons.min.js"></script>
+  <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body cds-theme="dark">
+  <div class="main-container">
+    <header class="header-6">
+      <div class="branding">
+        <a href="/">
+          <clr-icon shape="eye"></clr-icon>
+          <span class="title">Fibril</span>
+        </a>
+      </div>
+      <div class="settings">
+        <a href="javascript://" class="nav-link nav-icon" aria-label="settings">
+          <clr-icon shape="cog"></clr-icon>
+        </a>
+      </div>
+    </header>
+    <nav class="subnav">
+      <ul class="nav">
+        <li class="nav-item">
+          <a {{active_dashboard}} href="/">Dashboard</a>
+        </li>
+        <li class="nav-item">
+          <a {{active_connections}} href="/admin/connections">Connections</a>
+        </li>
+        <li class="nav-item">
+          <a {{active_subscriptions}} href="/admin/subscriptions">Subscriptions</a>
+        </li>
+      </ul>
+    </nav>
+    <div class="content-container">
+      <div class="content-area">
+        {{content}}
+      </div>
+    </div>
+    <footer class="footer">
+      <span class="copyright">
+        Fibril © 2025 - fast · deterministic · boring
+      </span>
+      ·
+      <a href="https://github.com/axmouth/fibril" target="_blank">
+        <clr-icon shape="code"></clr-icon> GitHub
+      </a>
+      ·
+      <a href="https://axmouth.dev" target="_blank">
+        <clr-icon shape="user"></clr-icon> Author
+      </a>
+    </footer>
+
+  </div>
+  <script>
+    document.body.setAttribute("cds-theme",
+      window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+    );
+  </script>
+</body>
+</html>

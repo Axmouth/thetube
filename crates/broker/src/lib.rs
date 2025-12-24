@@ -811,9 +811,9 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                         if let Some((_, tag)) = gs.delivery_tag_by_offset.remove(&expired_offset)
                             && let Some((_, (_off, permit))) =
                                 gs.inflight_permits_by_tag.remove(&tag)
-                            {
-                                drop(permit);
-                            }
+                        {
+                            drop(permit);
+                        }
                         gs.redelivery.push(msg.message.offset);
                         metrics.expired();
                         gs.signal();
@@ -1184,7 +1184,9 @@ async fn process_fresh_deliveries(ctx: &DeliveryCtx) -> bool {
             Ok(p) => {
                 let epoch = group_state.tag_counter.fetch_add(1, Ordering::SeqCst);
                 msg.delivery_tag.epoch = epoch;
-                group_state.delivery_tag_by_offset.insert(msg.message.offset, msg.delivery_tag);
+                group_state
+                    .delivery_tag_by_offset
+                    .insert(msg.message.offset, msg.delivery_tag);
                 permits.push((msg.delivery_tag, p));
                 entries.push((msg.message.offset, unix_millis() + ttl_deadline_delta_ms));
             }

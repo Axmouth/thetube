@@ -1,0 +1,19 @@
+<h4 class="metrics-header">Subscriptions</h4>
+<table class="table table-compact narrow metric-table" id="table"></table>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/admin.js"></script>
+<script>
+async function refresh() {
+  const rows = await api('/admin/api/subscriptions');
+  const t = document.getElementById("table");
+  t.innerHTML = `<tr><th>Topic</th><th>Group</th><th>Uptime</th><th>Auto</th></tr>` +
+    rows.map(r=>`<tr>
+      <td>${r.topic}</td>
+      <td>${r.group}</td>
+      <td>${fmtUptime(r.uptime)}</td>
+      <td>${r.auto_ack}</td>
+    </tr>`).join('');
+}
+setInterval(refresh, 2000);
+refresh();
+</script>

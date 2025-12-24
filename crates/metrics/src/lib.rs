@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use serde::Serialize;
+use serde_json::json;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -315,6 +317,7 @@ impl StorageStats {
     }
 }
 
+#[derive(Serialize)]
 pub struct StorageStatsSnapshot {
     pub reads_per_sec_1m: f64,
     pub writes_per_sec_1m: f64,
@@ -444,6 +447,7 @@ impl BrokerStats {
     }
 }
 
+#[derive(Serialize)]
 pub struct BrokerStatsSnapshot {
     pub delivered_per_sec_1m: f64,
     pub published_per_sec_1m: f64,
@@ -531,6 +535,7 @@ impl TcpStats {
     }
 }
 
+#[derive(Serialize)]
 pub struct TcpStatsSnapshot {
     pub connections_per_sec_1m: f64,
     pub disconnections_per_sec_1m: f64,
@@ -953,5 +958,40 @@ impl ConnectionStats {
         }
 
         false
+    }
+    pub fn snapshot(&self) -> serde_json::Value {
+        let mut conns = Vec::new();
+
+        for c in self.connections.iter() {
+            let uptime = c.connected_at.elapsed().as_secs();
+            conns.push(json!({
+                "id": c.key().to_string(),
+                "peer": c.peer.to_string(),
+                "uptime": uptime,
+                "authenticated": c.authenticated,
+                "subs": c.subs.len()
+            }));
+        }
+
+        serde_json::Value::Array(conns)
+    }
+
+    pub fn snapshot_subs(&self) -> serde_json::Value {
+        let mut subs = Vec::new();
+
+        for c in self.connections.iter() {
+            for s in c.subs.iter() {
+                subs.push(json!({
+                    "conn_id": c.key().to_string(),
+                    "sub_id": s.key().to_string(),
+                    "topic": s.topic,
+                    "group": s.group,
+                    "uptime": s.connected_at.elapsed().as_secs(),
+                    "auto_ack": s.auto_ack
+                }));
+            }
+        }
+
+        serde_json::Value::Array(subs)
     }
 }

@@ -1,0 +1,23 @@
+
+<h4 class="metrics-header">Overview</h4>
+
+  <table class="table table-compact narrow metric-table">
+    <tr><th>Delivered / s</th><td id="delivered"></td></tr>
+    <tr><th>Acked / s</th><td id="acked"></td></tr>
+    <tr><th>Write latency (ms)</th><td id="write_ms"></td></tr>
+    <tr><th>Append batch latency (ms)</th><td id="append_ms"></td></tr>
+  </table>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/admin.js"></script>
+<script>
+async function refresh() {
+  const d = await api('/admin/api/overview');
+  document.getElementById("delivered").textContent = d.broker.delivered_per_sec_1m.toFixed(1);
+  document.getElementById("acked").textContent = d.broker.acked_per_sec_1m.toFixed(1);
+  document.getElementById("write_ms").textContent = d.storage.avg_write_latency_ms?.toFixed(2);
+  document.getElementById("append_ms").textContent = d.storage.avg_append_batch_latency_ms?.toFixed(2);
+}
+setInterval(refresh, 2000);
+refresh();
+</script>

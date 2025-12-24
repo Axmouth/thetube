@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use fibril_admin::{AdminConfig, AdminServer};
 use fibril_broker::{Broker, BrokerConfig, coordination::NoopCoordination};
 use fibril_metrics::{Metrics, MetricsConfig};
 use fibril_protocol::v1::handler::run_server;
@@ -34,12 +35,21 @@ async fn main() -> anyhow::Result<()> {
 
     let auth_handler = StaticAuthHandler::new("fibril".to_string(), "fibril".to_string());
 
-    let server_fut = run_server(
+    let broker_server_fut = run_server(
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from([0, 0, 0, 0]), 9876)),
         broker,
         metrics.tcp(),
         metrics.connections(),
-        Some(auth_handler),
+        Some(auth_handler.clone()),
+    );
+
+    let admin = AdminServer::new(
+        metrics.clone(),
+        AdminConfig {
+            bind: "0.0.0.0:8080".into(),
+            // auth: Some(auth_handler),
+            auth: None,
+        },
     );
 
     metrics.start(MetricsConfig {
@@ -48,7 +58,11 @@ async fn main() -> anyhow::Result<()> {
         log_tcp: true,
     });
 
-    server_fut.await?;
+    let admin_server_dut = admin.run();
+
+    let (broker_res, admin_res) = tokio::join!(broker_server_fut, admin_server_dut);
+    broker_res?;
+    admin_res?;
 
     Ok(())
 }
