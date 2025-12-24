@@ -1,5 +1,3 @@
-vendor clarity design(no web should be needed)
-
 more cleanup tests
 
 cleanup leftover inflight without message (or better figure why it happens)
@@ -47,8 +45,6 @@ on restart, read it directly
 
 clusters (leader through shared networked storage initially, raft replication later?)
 
-admin/dashboard
-
 cli
 
 confirm stream(option, config) and test
@@ -72,3 +68,5 @@ write an operator runbook
 rabbitmq compatible endpoint?
 
 replace epoch in delivery tag with gen and seq. Seq is simple monotonic counter, gen is increased per instance(process? task?) created
+
+dls or embedded language to script transformations, routing, etc?

@@ -10,6 +10,7 @@ fibril-storage = { path = "../storage" }
 fibril-metrics = { path = "../metrics" }
 fibril-util = { path = "../util" }
 anyhow = "1.0"
+askama = { version = "0.15" }
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"

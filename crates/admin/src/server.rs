@@ -1,12 +1,12 @@
+use askama::Template;
 use axum::{
     Router,
     response::Html,
     routing::{get, get_service},
 };
-use dashmap::DashMap;
 use fibril_util::StaticAuthHandler;
-use std::{sync::Arc, time::SystemTime};
-use tokio::{net::TcpListener, sync::OnceCell};
+use std::sync::Arc;
+use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 
 use crate::routes;
@@ -30,52 +30,57 @@ impl AdminServer {
 
     pub async fn run(self) -> anyhow::Result<()> {
         let state = Arc::new(self);
-        let cache = Arc::new(PageCache::new());
 
-        let handler404 = {
-            let cache = cache.clone();
-            move || async move { Html(cache.render("admin-ui/pages/404.html", "Not Found", "/").await) }
+        let handler404 = move || async move {
+            Html(Html(
+                NotFound {
+                    page: "404",
+                    title: "Not Found",
+                }
+                .render()
+                .unwrap(),
+            ))
         };
 
         let app = Router::new()
             .nest_service("/static", get_service(ServeDir::new("admin-ui")))
             .route(
                 "/",
-                get({
-                    let cache = cache.clone();
-                    move || async move {
-                        Html(
-                            cache
-                                .render("admin-ui/pages/overview.html", "Overview", "/")
-                                .await,
-                        )
-                    }
+                get(move || async move {
+                    Html(
+                        OverviewPage {
+                            page: "dashboard",
+                            title: "Overview",
+                        }
+                        .render()
+                        .unwrap(),
+                    )
                 }),
             )
             .route(
                 "/admin/connections",
-                get({
-                    let cache = cache.clone();
-                    move || async move {
-                        Html(
-                            cache
-                                .render("admin-ui/pages/connections.html", "Connections", "/admin/connections")
-                                .await,
-                        )
-                    }
+                get(move || async move {
+                    Html(
+                        Connections {
+                            page: "connections",
+                            title: "Connections",
+                        }
+                        .render()
+                        .unwrap(),
+                    )
                 }),
             )
             .route(
                 "/admin/subscriptions",
-                get({
-                    let cache = cache.clone();
-                    move || async move {
-                        Html(
-                            cache
-                                .render("admin-ui/pages/subscriptions.html", "Subscriptions", "/admin/subscriptions")
-                                .await,
-                        )
-                    }
+                get(move || async move {
+                    Html(
+                        Subscriptions {
+                            page: "subscriptions",
+                            title: "Subscriptions",
+                        }
+                        .render()
+                        .unwrap(),
+                    )
                 }),
             )
             .route("/admin/api/overview", get(routes::overview))
@@ -91,61 +96,30 @@ impl AdminServer {
     }
 }
 
-static LAYOUT: OnceCell<String> = OnceCell::const_new();
-
-struct PageCache {
-    rendered: DashMap<String, (SystemTime, String)>,
+#[derive(Template)]
+#[template(path = "pages/overview.html")]
+struct OverviewPage {
+    page: &'static str,
+    title: &'static str,
 }
 
-impl PageCache {
-    pub fn new() -> Self {
-        Self {
-            rendered: DashMap::new(),
-        }
-    }
+#[derive(Template)]
+#[template(path = "pages/connections.html")]
+struct Connections {
+    page: &'static str,
+    title: &'static str,
+}
 
-    pub async fn render(&self, path: &str, title: &str, url: &str) -> String {
-        let meta = tokio::fs::metadata(path).await.unwrap();
-        let mtime = meta.modified().unwrap();
+#[derive(Template)]
+#[template(path = "pages/subscriptions.html")]
+struct Subscriptions {
+    page: &'static str,
+    title: &'static str,
+}
 
-        if let Some(entry) = self.rendered.get(path)
-            && entry.value().0 == mtime
-        {
-            // return entry.value().1.clone();
-        }
-
-        let layout = LAYOUT
-            .get_or_init(|| async {
-                tokio::fs::read_to_string("admin-ui/layout.html")
-                    .await
-                    .unwrap()
-            })
-            .await;
-        let mut layout = tokio::fs::read_to_string("admin-ui/layout.html")
-            .await
-            .unwrap();
-
-        layout = layout.replace("{{path}}", path);
-
-        let page = tokio::fs::read_to_string(path).await.unwrap();
-
-        let html = layout
-            .replace(
-                "{{active_dashboard}}",
-                if url == "/" { "class=\"nav-link active\" aria-current=\"page\"" } else { "class=\"nav-link\"" },
-            )
-            .replace(
-                "{{active_connections}}",
-                if url == "/admin/connections" { "class=\"nav-link active\" aria-current=\"page\"" } else { "class=\"nav-link\"" },
-            )
-            .replace(
-                "{{active_subscriptions}}",
-                if url == "/admin/subscriptions" { "class=\"nav-link active\" aria-current=\"page\"" } else { "class=\"nav-link\"" },
-            )
-            .replace("{{title}}", title)
-            .replace("{{content}}", &page);
-
-        self.rendered.insert(path.into(), (mtime, html.clone()));
-        html
-    }
+#[derive(Template)]
+#[template(path = "pages/404.html")]
+struct NotFound {
+    page: &'static str,
+    title: &'static str,
 }

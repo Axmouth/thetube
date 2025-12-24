@@ -29,19 +29,19 @@
     <nav class="subnav">
       <ul class="nav">
         <li class="nav-item">
-          <a {{active_dashboard}} href="/">Dashboard</a>
+              <a class="nav-link {% if page == "dashboard" %}active{% endif %}" href="/">Dashboard</a>
         </li>
         <li class="nav-item">
-          <a {{active_connections}} href="/admin/connections">Connections</a>
+          <a class="nav-link {% if page == "connections" %}active{% endif %}" href="/admin/connections">Connections</a>
         </li>
         <li class="nav-item">
-          <a {{active_subscriptions}} href="/admin/subscriptions">Subscriptions</a>
+          <a class="nav-link {% if page == "subscriptions" %}active{% endif %}" href="/admin/subscriptions">Subscriptions</a>
         </li>
       </ul>
     </nav>
     <div class="content-container">
       <div class="content-area">
-        {{content}}
+        {% block content %}{% endblock %}
       </div>
     </div>
     <footer class="footer">

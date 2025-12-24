@@ -18,6 +18,8 @@ footer {
   margin-top: 40px;
   padding: 32px;
   text-align: center;
+  margin-right: 4px;
+  vertical-align: middle;
 }
 
 main {

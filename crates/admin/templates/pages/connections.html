@@ -1,3 +1,5 @@
+{% extends "layout.html" %}
+{% block content %}
 <h4 class="metrics-header">Connections</h4>
 <table class="table table-compact narrow metric-table" id="table"></table>
 <script src="/static/js/api.js"></script>
@@ -17,3 +19,4 @@ async function refresh() {
 setInterval(refresh, 2000);
 refresh();
 </script>
+{% endblock %}
