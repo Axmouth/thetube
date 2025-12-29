@@ -94,7 +94,7 @@ fn random_inter_message_delay() -> Duration {
 }
 
 fn init_app() -> App {
-    let pubs = (0..3)
+    let pubs = (0..6)
         .map(|i| Node {
             id: i,
             label: format!("PUB {}", i),
@@ -103,7 +103,7 @@ fn init_app() -> App {
         })
         .collect();
 
-    let subs = (0..3)
+    let subs = (0..6)
         .map(|i| Node {
             id: 100 + i,
             label: format!("SUB {}", i),

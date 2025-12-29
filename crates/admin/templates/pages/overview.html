@@ -7,6 +7,9 @@
     <tr><th>Acked / s</th><td id="acked"></td></tr>
     <tr><th>Write latency (ms)</th><td id="write_ms"></td></tr>
     <tr><th>Append batch latency (ms)</th><td id="append_ms"></td></tr>
+    <tr><th>Memory Usage (mb)</th><td id="rss_mb"></td></tr>
+    <tr><th>CPU Usage</th><td id="cpu"></td></tr>
+    <tr><th>Approx Disk Usage (mb)</th><td id="disk"></td></tr>
   </table>
 
 <script src="/static/js/api.js"></script>
@@ -18,6 +21,9 @@ async function refresh() {
   document.getElementById("acked").textContent = d.broker.acked_per_sec_1m.toFixed(1);
   document.getElementById("write_ms").textContent = d.storage.avg_write_latency_ms?.toFixed(2);
   document.getElementById("append_ms").textContent = d.storage.avg_append_batch_latency_ms?.toFixed(2);
+  document.getElementById("rss_mb").textContent = (d.sys.rss_mb / 1024).toFixed(2);
+  document.getElementById("cpu").textContent = d.sys.cpu?.toFixed(2);
+  document.getElementById("disk").textContent = (d.storage_used / (1024 * 1024)).toFixed(2);
 }
 setInterval(refresh, 2000);
 refresh();

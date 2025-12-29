@@ -5,6 +5,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::{get, get_service},
 };
+use fibril_storage::Storage;
 use fibril_util::StaticAuthHandler;
 use http::{Response, Uri, header};
 use rust_embed::{Embed, RustEmbed};
@@ -25,6 +26,7 @@ pub struct AdminConfig {
 pub struct AdminServer {
     pub metrics: Metrics,
     pub config: AdminConfig,
+    pub storage: Arc<dyn Storage>,
 }
 
 fn render<T: Template>(tpl: T) -> Html<String> {
@@ -32,14 +34,14 @@ fn render<T: Template>(tpl: T) -> Html<String> {
         Ok(v) => Html(v),
         Err(e) => {
             tracing::error!("template render error: {e}");
-            Html("<h1>500 – template error</h1>".into())
+            Html("<h1>500 - template error</h1>".into())
         }
     }
 }
 
 impl AdminServer {
-    pub fn new(metrics: Metrics, config: AdminConfig) -> Self {
-        Self { metrics, config }
+    pub fn new(metrics: Metrics, config: AdminConfig, storage: Arc<dyn Storage>) -> Self {
+        Self { metrics, config, storage }
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
@@ -70,6 +72,7 @@ impl AdminServer {
             .with_state(state.clone());
 
         let listener = TcpListener::bind(&state.config.bind).await?;
+        print_admin_banner(&state.config.bind, state.config.auth.is_some());
         tracing::info!("listening on {}", state.config.bind);
         axum::serve(listener, app).await?;
         Ok(())
@@ -145,4 +148,23 @@ struct Subscriptions {
 struct NotFound {
     page: &'static str,
     title: &'static str,
+}
+
+pub fn print_admin_banner(bind: &str, auth: bool) {
+    let auth = if auth { "enabled " } else { "disabled" };
+
+    tracing::info!(
+        r#"
+                                                
+┌──────────────────────────────────────────────┐
+│            Fibril Admin Console              │
+├──────────────────────────────────────────────┤
+│  Web UI        : http://{bind:<20} │
+│  Mode          : internal / operator         │
+│  Auth          : {auth:<27} │
+└──────────────────────────────────────────────┘
+                                                
+"#,
+        bind = bind
+    );
 }

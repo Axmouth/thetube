@@ -1,5 +1,6 @@
 pub mod observable_storage;
 pub mod rocksdb_store;
+pub mod stroma_store;
 
 use async_trait::async_trait;
 
@@ -231,6 +232,8 @@ pub trait Storage: Send + Sync + std::fmt::Debug {
     /// Full recompute: scan inflight CF for the minimum deadline and store it.
     /// Call this from the redelivery worker after scanning/processing.
     async fn recompute_and_store_next_expiry_hint(&self) -> Result<Option<u64>, StorageError>;
+
+    async fn estimate_disk_used(&self) -> Result<u64, StorageError>;
 
     async fn dump_meta_keys(&self);
 }

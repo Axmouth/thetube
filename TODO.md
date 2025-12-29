@@ -1,6 +1,27 @@
+TODO:
+Broker should no longer:
+loop compute_start_offset() by calling is_inflight_or_acked() repeatedly.
+Instead:
+start = stroma.next_deliverable(tp,g, current_cursor, upper)
+Also: redelivery queue should remain bounded by inflight cap (it mostly is already), but don’t let it accumulate unbounded offsets from repeated failures—Stroma can own "expired offsets" listing.
+
+Redelivery not counted as inflight(not added to set)? Consider how to handle
+
+Revisit batch size/timeout dynamic rampups based on load (Revisit PID controller setup?)
+
+refactor batching to not be ad hoc but separate layer with centralized reusable logic
+
+play with having code return dummy responses and see max broker throughput and bottlenecks
+
+ui login
+
+reorganize for structs/models in a common crate, to avoid circles between metrics and storage too
+
 more cleanup tests
 
 cleanup leftover inflight without message (or better figure why it happens)
+
+Make sure cleanup reclaims space(seems not to?)
 
 config
 
@@ -70,3 +91,5 @@ rabbitmq compatible endpoint?
 replace epoch in delivery tag with gen and seq. Seq is simple monotonic counter, gen is increased per instance(process? task?) created
 
 dls or embedded language to script transformations, routing, etc?
+
+recovered_cursors, topics, etc, cleanup after inactivity? (when empty, occasional cleanup)

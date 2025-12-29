@@ -1,4 +1,5 @@
 use axum::{Json, extract::State, http::StatusCode};
+use fibril_metrics::{BrokerStatsSnapshot, StorageStatsSnapshot, SystemSnapshot};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -7,8 +8,10 @@ use crate::server::AdminServer;
 
 #[derive(Serialize)]
 pub struct OverviewResponse {
-    pub broker: fibril_metrics::BrokerStatsSnapshot,
-    pub storage: fibril_metrics::StorageStatsSnapshot,
+    pub broker: BrokerStatsSnapshot,
+    pub storage: StorageStatsSnapshot,
+    pub sys: SystemSnapshot,
+    pub storage_used: u64,
 }
 
 pub async fn overview(
@@ -20,6 +23,8 @@ pub async fn overview(
     Ok(Json(OverviewResponse {
         broker: server.metrics.broker().snapshot(),
         storage: server.metrics.storage().snapshot(),
+        sys: server.metrics.system().snapshot(),
+        storage_used: server.storage.estimate_disk_used().await.unwrap_or_default(),
     }))
 }
 

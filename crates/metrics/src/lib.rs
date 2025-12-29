@@ -4,8 +4,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::json;
+use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -550,6 +552,45 @@ pub struct TcpStatsSnapshot {
     pub errors_total: u64,
 }
 
+pub struct SystemStats {
+    sys: RwLock<System>,
+    pid: sysinfo::Pid,
+}
+
+impl SystemStats {
+    pub fn new() -> Arc<Self> {
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+        );
+        sys.refresh_processes();
+        Arc::new(Self {
+            sys: RwLock::new(sys),
+            pid: sysinfo::get_current_pid().unwrap(),
+        })
+    }
+
+    pub fn snapshot(&self) -> SystemSnapshot {
+        self.sys.write().refresh_process(self.pid);
+        let sys = self.sys.read();
+        let (rss_mb, cpu) = if let Some(p) = sys.process(self.pid) {
+            (p.memory() as f64 / 1024.0, p.cpu_usage())
+        } else {
+            (0., 0.)
+        };
+
+        SystemSnapshot {
+            rss_mb,
+            cpu,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct SystemSnapshot {
+    pub rss_mb: f64,
+    pub cpu: f32,
+}
+
 #[derive(Clone)]
 pub struct Metrics {
     inner: Arc<MetricsInner>,
@@ -575,6 +616,7 @@ struct MetricsInner {
     pub broker: Arc<BrokerStats>,
     pub tcp: Arc<TcpStats>,
     pub conn: Arc<ConnectionStats>,
+    pub sys: Arc<SystemStats>,
     // later: protocol, client, etc
 }
 
@@ -586,6 +628,7 @@ impl Metrics {
                 broker: BrokerStats::new(buckets),
                 tcp: TcpStats::new(buckets),
                 conn: ConnectionStats::new(),
+                sys: SystemStats::new(),
             }),
         }
     }
@@ -612,6 +655,10 @@ impl Metrics {
 
     pub fn connections(&self) -> Arc<ConnectionStats> {
         self.inner.conn.clone()
+    }
+
+    pub fn system(&self) -> Arc<SystemStats> {
+        self.inner.sys.clone()
     }
 }
 

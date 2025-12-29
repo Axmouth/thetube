@@ -9,6 +9,11 @@ use fibril_metrics::{Metrics, MetricsConfig};
 use fibril_protocol::v1::handler::run_server;
 use fibril_storage::{observable_storage::ObservableStorage, rocksdb_store::RocksStorage};
 use fibril_util::{StaticAuthHandler, init_tracing};
+use mimalloc::MiMalloc;
+
+#[cfg(windows)]
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,11 +22,11 @@ async fn main() -> anyhow::Result<()> {
     // TODO configurable stuff
     let storage = RocksStorage::open("test_data/server", true)?;
     let metrics = Metrics::new(3 * 60 * 60); // 3 hours
-    let observable_storage = ObservableStorage::new(storage, metrics.storage());
+    let observable_storage = Arc::new(ObservableStorage::new(storage, metrics.storage()));
     let coord = NoopCoordination;
     let broker = Arc::new(
         Broker::try_new(
-            observable_storage,
+            observable_storage.clone(),
             coord,
             metrics.broker(),
             BrokerConfig {
@@ -50,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
             // auth: Some(auth_handler),
             auth: None,
         },
+        observable_storage.clone(),
     );
 
     metrics.start(MetricsConfig {

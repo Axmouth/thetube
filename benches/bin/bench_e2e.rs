@@ -279,7 +279,7 @@ async fn make_broker_with_cfg(cmd: &E2EBench) -> Broker<NoopCoordination> {
 
     let store = make_rocksdb_store(&db_path, cmd.sync_write).unwrap();
     let metrics = Metrics::new(60 * 60);
-    let store = ObservableStorage::new(store, metrics.storage());
+    let store = Arc::new(ObservableStorage::new(store, metrics.storage()));
     let coord = NoopCoordination {};
 
     let broker = Broker::try_new(store, coord, metrics.broker(), cfg)
@@ -305,7 +305,8 @@ async fn run_e2e_bench(cmd: E2EBench) {
     let topic = format!("bench_topic_{}", fastrand::u64(..));
 
     // Consumers
-    for _ in 0..cmd.consumers {
+    for i in 0..cmd.consumers {
+        // let topic = format!("{}_{}", topic, i);
         let consumer = broker
             .subscribe(
                 &topic,
@@ -326,6 +327,7 @@ async fn run_e2e_bench(cmd: E2EBench) {
     let per_producer = cmd.messages / cmd.producers as u64;
 
     for p in 0..cmd.producers {
+        // let topic = format!("{}_{}", topic, p);
         tokio::spawn(producer_task(
             broker.clone(),
             topic.clone(),

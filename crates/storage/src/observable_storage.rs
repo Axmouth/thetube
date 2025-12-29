@@ -330,6 +330,14 @@ impl<S: Storage> Storage for ObservableStorage<S> {
         )
     }
 
+    async fn estimate_disk_used(&self) -> Result<u64, StorageError> {
+        observe!(
+            self.stats,
+            control_plane,
+            self.inner().estimate_disk_used()
+        )
+    }
+
     async fn dump_meta_keys(&self) {
         self.inner().dump_meta_keys().await
     }

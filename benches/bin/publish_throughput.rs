@@ -55,7 +55,7 @@ async fn main() {
 
     // RocksDB setup
     std::fs::create_dir_all(&args.db_path).unwrap();
-    let storage = make_rocksdb_store(&args.db_path, args.sync_write).unwrap();
+    let storage =  Arc::new(make_rocksdb_store(&args.db_path, args.sync_write).unwrap());
     let metrics = Metrics::new(60 * 60);
 
     let broker = Arc::new(

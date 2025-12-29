@@ -18,7 +18,7 @@ fn make_test_store() -> anyhow::Result<impl Storage> {
 }
 
 async fn make_test_broker() -> anyhow::Result<Broker<NoopCoordination>> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let metrics = Metrics::new(60 * 60);
     Ok(Broker::try_new(
         store,
@@ -42,7 +42,7 @@ async fn make_test_broker() -> anyhow::Result<Broker<NoopCoordination>> {
 async fn make_test_broker_with_cfg(
     config: BrokerConfig,
 ) -> anyhow::Result<Broker<NoopCoordination>> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let metrics = Metrics::new(60 * 60);
     Ok(Broker::try_new(store, NoopCoordination, metrics.broker(), config).await?)
 }
@@ -498,7 +498,7 @@ async fn selective_ack_no_wrong_rewind() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_basic() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 5,
@@ -541,7 +541,7 @@ async fn batch_basic() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_timeout_flushes() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 100,
@@ -563,7 +563,7 @@ async fn batch_timeout_flushes() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_concurrent_ordering() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 10,
@@ -600,7 +600,7 @@ async fn batch_concurrent_ordering() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_publish_and_consume() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 5,
@@ -642,7 +642,7 @@ async fn batch_publish_and_consume() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_multiple_topics() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 4,
@@ -671,7 +671,7 @@ async fn publish_burst_then_consume_everything() -> anyhow::Result<()> {
     let total = 50_000;
     let max_payload = 512;
 
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 64,
@@ -735,7 +735,7 @@ async fn publish_burst_then_consume_everything() -> anyhow::Result<()> {
 async fn concurrent_publish_and_consume() -> anyhow::Result<()> {
     let total = 100_000;
 
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 64,
@@ -869,7 +869,7 @@ async fn redelivery_under_load_256k() -> anyhow::Result<()> {
 }
 
 async fn redelivery_under_load(total: usize) -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_timeout_ms: 1,
@@ -902,7 +902,7 @@ async fn redelivery_under_load(total: usize) -> anyhow::Result<()> {
         .subscribe(
             "t",
             "g",
-            make_default_cons_cfg().with_prefetch_count(total * 100 + 1),
+            make_default_cons_cfg().with_prefetch_count(total + 2),
         )
         .await?;
 
@@ -978,7 +978,7 @@ async fn restart_persists_messages() -> anyhow::Result<()> {
 
     // 1) First broker instance: publish messages
     {
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
         let metrics = Metrics::new(60 * 60);
         let broker = Broker::try_new(store, coord.clone(), metrics.broker(), cfg.clone()).await?;
 
@@ -996,7 +996,7 @@ async fn restart_persists_messages() -> anyhow::Result<()> {
 
     // 2) New broker instance on the same path
     {
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
         let metrics = Metrics::new(60 * 60);
         let broker = Broker::try_new(store, coord.clone(), metrics.broker(), cfg.clone()).await?;
 
@@ -1042,7 +1042,7 @@ async fn restart_persists_ack_state() -> anyhow::Result<()> {
 
     // 1) First broker: publish and ACK some messages
     {
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
         let metrics = Metrics::new(60 * 60);
         let broker = Broker::try_new(store, coord.clone(), metrics.broker(), cfg.clone()).await?;
         let (pubh, mut confirms) = broker.get_publisher("restart_ack_topic").await?;
@@ -1082,7 +1082,7 @@ async fn restart_persists_ack_state() -> anyhow::Result<()> {
         // Wait past inflight TTL to ensure no inflight entries remain
         tokio::time::sleep(std::time::Duration::from_secs(4)).await;
 
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
         let metrics = Metrics::new(60 * 60);
         let broker = Broker::try_new(store, coord.clone(), metrics.broker(), cfg.clone()).await?;
 
@@ -1135,7 +1135,7 @@ async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
 
     // 1) First broker: publish + first delivery (no ACK)
     {
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
         let metrics = Metrics::new(60 * 60);
         let broker = Broker::try_new(store, coord.clone(), metrics.broker(), cfg.clone()).await?;
 
@@ -1163,7 +1163,7 @@ async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
 
     // 2) Second broker: same DB, new worker, must redeliver
     {
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
         let metrics = Metrics::new(60 * 60);
         let broker =
             Arc::new(Broker::try_new(store, coord.clone(), metrics.broker(), cfg.clone()).await?);
@@ -1332,7 +1332,7 @@ async fn multi_topic_multi_group_isolation() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 32,
@@ -1456,7 +1456,7 @@ async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 32,
@@ -1557,7 +1557,7 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn storage_inflight_implies_message_exists() -> anyhow::Result<()> {
-    let store = make_test_store()?;
+    let store = Arc::new(make_test_store()?);
 
     let topic = "t".to_string();
     let group = "g".to_string();
@@ -1627,7 +1627,7 @@ async fn crash_after_send_before_inflight_causes_redelivery() -> anyhow::Result<
     let offset;
 
     {
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
         let metrics = Metrics::new(60 * 60);
         let broker = Broker::try_new(store, coord.clone(), metrics.broker(), cfg.clone()).await?;
         let (pubh, mut confirms) = broker.get_publisher("t").await?;
@@ -1646,7 +1646,7 @@ async fn crash_after_send_before_inflight_causes_redelivery() -> anyhow::Result<
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     {
-        let store = make_rocksdb_store(&db_path, false)?;
+        let store = Arc::new(make_rocksdb_store(&db_path, false)?);
 
         let metrics = Metrics::new(60 * 60);
         let broker = Arc::new(Broker::try_new(store, coord, metrics.broker(), cfg).await?);

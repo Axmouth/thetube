@@ -39,7 +39,7 @@ pub async fn run_server<C: Coordination + Send + Sync + 'static>(
     auth: Option<impl AuthHandler + Send + Sync + Clone + 'static>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!("listening on {}", addr);
+    print_banner(&addr);
 
     loop {
         let (socket, peer) = listener.accept().await?;
@@ -449,3 +449,88 @@ pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     tcp_stats.connection_closed();
     Ok(())
 }
+
+pub fn print_banner(bind: &SocketAddr) {
+    let art = ASCII_ARTS[0];
+
+    tracing::info!("\n{art}\nListening on {bind}\n");
+}
+
+const ASCII_ARTS: &[&str] = &[r#"
+███████╗██╗██████╗ ██████╗ ██╗██╗     
+██╔════╝██║██╔══██╗██╔══██╗██║██║     
+█████╗  ██║██████╔╝██████╔╝██║██║     
+██╔══╝  ██║██╔══██╗██╔══██╗██║██║     
+██║     ██║██████╔╝██║  ██║██║███████╗
+╚═╝     ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝╚══════╝
+                                         
+                                         
+"#,r#"
+                                                  
+88888888888  88  88                       88  88  
+88           ""  88                       ""  88  
+88               88                           88  
+88aaaaa      88  88,dPPYba,   8b,dPPYba,  88  88  
+88"""""      88  88P'    "8a  88P'   "Y8  88  88  
+88           88  88       d8  88          88  88  
+88           88  88b,   ,a8"  88          88  88  
+88           88  8Y"Ybbd8"'   88          88  88  
+                                                  
+                                                  
+"#,r#"
+'||''''|  ||  '||               ||  '||  
+ ||  .   ...   || ...  ... ..  ...   ||  
+ ||''|    ||   ||'  ||  ||' ''  ||   ||  
+ ||       ||   ||    |  ||      ||   ||  
+.||.     .||.  '|...'  .||.    .||. .||. 
+                                         
+                                         
+"#,r#"
+'||''''|      '||                 '||` 
+ ||  .    ''   ||             ''   ||  
+ ||''|    ||   ||''|, '||''|  ||   ||  
+ ||       ||   ||  ||  ||     ||   ||  
+.||.     .||. .||..|' .||.   .||. .||. 
+                                       
+                                       
+"#,r#"
+ ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄   ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄  ▄           
+▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░▌ ▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░▌          
+▐░█▀▀▀▀▀▀▀▀▀  ▀▀▀▀█░█▀▀▀▀ ▐░█▀▀▀▀▀▀▀█░▌▐░█▀▀▀▀▀▀▀█░▌ ▀▀▀▀█░█▀▀▀▀ ▐░▌          
+▐░▌               ▐░▌     ▐░▌       ▐░▌▐░▌       ▐░▌     ▐░▌     ▐░▌          
+▐░█▄▄▄▄▄▄▄▄▄      ▐░▌     ▐░█▄▄▄▄▄▄▄█░▌▐░█▄▄▄▄▄▄▄█░▌     ▐░▌     ▐░▌          
+▐░░░░░░░░░░░▌     ▐░▌     ▐░░░░░░░░░░▌ ▐░░░░░░░░░░░▌     ▐░▌     ▐░▌          
+▐░█▀▀▀▀▀▀▀▀▀      ▐░▌     ▐░█▀▀▀▀▀▀▀█░▌▐░█▀▀▀▀█░█▀▀      ▐░▌     ▐░▌          
+▐░▌               ▐░▌     ▐░▌       ▐░▌▐░▌     ▐░▌       ▐░▌     ▐░▌          
+▐░▌           ▄▄▄▄█░█▄▄▄▄ ▐░█▄▄▄▄▄▄▄█░▌▐░▌      ▐░▌  ▄▄▄▄█░█▄▄▄▄ ▐░█▄▄▄▄▄▄▄▄▄ 
+▐░▌          ▐░░░░░░░░░░░▌▐░░░░░░░░░░▌ ▐░▌       ▐░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌
+ ▀            ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀   ▀         ▀  ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀ 
+                                                                              
+"#,r#"
+                                                                                    
+                             bbbbbbbb                                               
+FFFFFFFFFFFFFFFFFFFFFF  iiii b::::::b                                 iiii  lllllll 
+F::::::::::::::::::::F i::::ib::::::b                                i::::i l:::::l 
+F::::::::::::::::::::F  iiii b::::::b                                 iiii  l:::::l 
+FF::::::FFFFFFFFF::::F        b:::::b                                       l:::::l 
+  F:::::F       FFFFFFiiiiiii b:::::bbbbbbbbb    rrrrr   rrrrrrrrr  iiiiiii  l::::l 
+  F:::::F             i:::::i b::::::::::::::bb  r::::rrr:::::::::r i:::::i  l::::l 
+  F::::::FFFFFFFFFF    i::::i b::::::::::::::::b r:::::::::::::::::r i::::i  l::::l 
+  F:::::::::::::::F    i::::i b:::::bbbbb:::::::brr::::::rrrrr::::::ri::::i  l::::l 
+  F:::::::::::::::F    i::::i b:::::b    b::::::b r:::::r     r:::::ri::::i  l::::l 
+  F::::::FFFFFFFFFF    i::::i b:::::b     b:::::b r:::::r     rrrrrrri::::i  l::::l 
+  F:::::F              i::::i b:::::b     b:::::b r:::::r            i::::i  l::::l 
+  F:::::F              i::::i b:::::b     b:::::b r:::::r            i::::i  l::::l 
+FF:::::::FF           i::::::ib:::::bbbbbb::::::b r:::::r           i::::::il::::::l
+F::::::::FF           i::::::ib::::::::::::::::b  r:::::r           i::::::il::::::l
+F::::::::FF           i::::::ib:::::::::::::::b   r:::::r           i::::::il::::::l
+FFFFFFFFFFF           iiiiiiiibbbbbbbbbbbbbbbb    rrrrrrr           iiiiiiiillllllll
+                                                                                    
+                                                                                    
+                                                                                    
+                                                                                    
+                                                                                    
+                                                                                    
+                                                                                    
+"#
+];

@@ -110,6 +110,7 @@ pub struct PublishRequest {
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
     pub cleanup_interval_secs: u64,
+    // TODO: Rename to better decribe? Ack deadline?
     pub inflight_ttl_secs: u64, // seconds
     pub publish_batch_size: usize,
     pub publish_batch_timeout_ms: u64,
@@ -303,12 +304,11 @@ pub struct Broker<C: Coordination + Send + Sync + 'static> {
 
 impl<C: Coordination + Send + Sync + 'static> Broker<C> {
     pub async fn try_new(
-        storage: impl Storage + 'static,
+        storage: Arc<impl Storage + 'static>,
         coord: C,
         metrics: Arc<BrokerStats>,
         config: BrokerConfig,
     ) -> Result<Self, BrokerError> {
-        let storage = Arc::new(storage);
         let shutdown = CancellationToken::new();
 
         if config.reset_inflight {
@@ -628,6 +628,7 @@ impl<C: Coordination + Send + Sync + 'static> Broker<C> {
                         if let Some((_, (offset, permit))) = group_state_arc.inflight_permits_by_tag.remove(&tag) {
                             // free capacity
                             drop(permit);
+                            group_state_arc.delivery_tag_by_offset.remove(&offset);
 
                             // enqueue for durable ack
                             buf.push(offset);

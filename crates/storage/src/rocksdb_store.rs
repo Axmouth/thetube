@@ -3,8 +3,7 @@ use fibril_util::unix_millis;
 
 use async_trait::async_trait;
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded,
-    Options, WriteBatch, WriteOptions,
+    BoundColumnFamily, ColumnFamilyDescriptor, CompactOptions, DBWithThreadMode, IteratorMode, MultiThreaded, Options, WriteBatch, WriteOptions
 };
 use std::sync::Arc;
 
@@ -58,12 +57,17 @@ impl RocksStorage {
         };
 
         let mut opts = Options::default();
+        opts.set_keep_log_file_num(5);
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
         opts.set_max_background_jobs(bg_jobs);
         opts.set_enable_pipelined_write(true);
+        // TODO: opt in from config?
+        // opts.enable_statistics();
+        // opts.set_stats_dump_period_sec(10);
+        // opts.set_level_compaction_dynamic_level_bytes(true);
         // TODO: Configurable?
-        opts.set_write_buffer_size(128 * 1024 * 1024); // 128MB
+        opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB
         opts.set_max_write_buffer_number(3);
         opts.set_min_write_buffer_number_to_merge(2);
         opts.set_manifest_preallocation_size(64 * 1024 * 1024);
@@ -77,6 +81,10 @@ impl RocksStorage {
         // TODO: eval
         block_opts.set_cache_index_and_filter_blocks(false);
         block_opts.set_pin_l0_filter_and_index_blocks_in_cache(false);
+        // TODO: from config too
+        // Cap block cache explicitly:
+        let cache = rocksdb::Cache::new_lru_cache(8 * 1024 * 1024); // 8MB
+        block_opts.set_block_cache(&cache);
 
         opts.set_block_based_table_factory(&block_opts);
 
@@ -103,6 +111,7 @@ impl RocksStorage {
 
         Ok(storage)
     }
+
 
     fn next_offset_key(topic: &Topic, partition: LogId) -> String {
         format!("NEXT_OFFSET:{}:{}", topic, partition)
@@ -757,6 +766,12 @@ impl Storage for RocksStorage {
 
         self.db.delete_range_cf(&messages_cf, start_key, end_key)?;
 
+        let mut opts = CompactOptions::default();
+        opts.set_change_level(true);
+        opts.set_target_level(0); // bottommost
+
+        self.db.compact_range_cf_opt(&messages_cf, None::<&[u8]>, None::<&[u8]>, &opts);
+
         Ok(())
     }
 
@@ -1033,6 +1048,23 @@ impl Storage for RocksStorage {
         }
         self.db.write_opt(batch, &self.write_opts())?;
         Ok(min_deadline)
+    }
+
+    async fn estimate_disk_used(&self) -> Result<u64, StorageError> {
+        let mut total = 0u64;
+
+        for cf_name in ["messages", "inflight", "acked", "meta", "groups"] {
+            let cf = self.cf(cf_name)?;
+
+            if let Some(v) = self.db.property_int_value_cf(
+                &cf,
+                "rocksdb.total-sst-files-size"
+            )? {
+                total += v;
+            }
+        }
+
+        Ok(total)
     }
 
     // TODO: Better timestamp support
