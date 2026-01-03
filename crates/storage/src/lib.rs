@@ -62,6 +62,14 @@ pub fn make_rocksdb_store(
     rocksdb_store::RocksStorage::open(path, sync_write)
 }
 
+pub async fn make_stroma_store(
+    path: &str,
+    sync_write: bool,
+) -> Result<stroma_store::StromaStorage, StorageError> {
+    stroma_store::StromaStorage::open(path, sync_write)
+        .await
+}
+
 /// Defines the persistent storage API for a durable queue system.
 #[async_trait]
 pub trait Storage: Send + Sync + std::fmt::Debug {

@@ -9,16 +9,19 @@ use fibril_util::unix_millis;
 use tokio::task::JoinHandle;
 
 // TODO: make shared
-fn make_test_store() -> anyhow::Result<impl Storage> {
+async fn make_test_store() -> anyhow::Result<impl Storage> {
     // make testdata dir
     std::fs::create_dir_all("test_data")?;
     // make random temp filename to avoid conflicts
     let filename = format!("test_data/{}", fastrand::u64(..));
-    Ok(make_rocksdb_store(&filename, false)?)
+    // Ok(make_rocksdb_store(&filename, false)?)
+    let res = make_stroma_store(&filename, true).await;
+
+    Ok(res?)
 }
 
 async fn make_test_broker() -> anyhow::Result<Broker<NoopCoordination>> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let metrics = Metrics::new(60 * 60);
     Ok(Broker::try_new(
         store,
@@ -42,7 +45,7 @@ async fn make_test_broker() -> anyhow::Result<Broker<NoopCoordination>> {
 async fn make_test_broker_with_cfg(
     config: BrokerConfig,
 ) -> anyhow::Result<Broker<NoopCoordination>> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let metrics = Metrics::new(60 * 60);
     Ok(Broker::try_new(store, NoopCoordination, metrics.broker(), config).await?)
 }
@@ -498,7 +501,7 @@ async fn selective_ack_no_wrong_rewind() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_basic() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 5,
@@ -541,7 +544,7 @@ async fn batch_basic() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_timeout_flushes() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 100,
@@ -563,7 +566,7 @@ async fn batch_timeout_flushes() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_concurrent_ordering() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 10,
@@ -600,7 +603,7 @@ async fn batch_concurrent_ordering() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_publish_and_consume() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 5,
@@ -642,7 +645,7 @@ async fn batch_publish_and_consume() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn batch_multiple_topics() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 4,
@@ -671,7 +674,7 @@ async fn publish_burst_then_consume_everything() -> anyhow::Result<()> {
     let total = 50_000;
     let max_payload = 512;
 
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 64,
@@ -735,11 +738,13 @@ async fn publish_burst_then_consume_everything() -> anyhow::Result<()> {
 async fn concurrent_publish_and_consume() -> anyhow::Result<()> {
     let total = 100_000;
 
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 64,
-        publish_batch_timeout_ms: 1,
+        publish_batch_timeout_ms: 15,
+        ack_batch_timeout_ms: 15,
+        inflight_batch_timeout_ms: 15,
         ..Default::default()
     };
 
@@ -869,10 +874,15 @@ async fn redelivery_under_load_256k() -> anyhow::Result<()> {
 }
 
 async fn redelivery_under_load(total: usize) -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
-        publish_batch_timeout_ms: 1,
+        publish_batch_timeout_ms: 15,
+        publish_batch_size: 4096,
+        ack_batch_timeout_ms: 15,
+        ack_batch_size: 4096,
+        inflight_batch_timeout_ms: 15,
+        inflight_batch_size: 4096,
         inflight_ttl_secs: 5,
         ..Default::default()
     }; // <-- generous TTL
@@ -902,7 +912,7 @@ async fn redelivery_under_load(total: usize) -> anyhow::Result<()> {
         .subscribe(
             "t",
             "g",
-            make_default_cons_cfg().with_prefetch_count(total + 2),
+            make_default_cons_cfg().with_prefetch_count(total * 1000 + 200),
         )
         .await?;
 
@@ -1332,7 +1342,7 @@ async fn multi_topic_multi_group_isolation() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 32,
@@ -1456,7 +1466,7 @@ async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
     let coord = NoopCoordination {};
     let cfg = BrokerConfig {
         publish_batch_size: 32,
@@ -1557,7 +1567,7 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn storage_inflight_implies_message_exists() -> anyhow::Result<()> {
-    let store = Arc::new(make_test_store()?);
+    let store = Arc::new(make_test_store().await?);
 
     let topic = "t".to_string();
     let group = "g".to_string();

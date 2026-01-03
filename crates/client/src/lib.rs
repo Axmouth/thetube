@@ -56,6 +56,7 @@ pub struct AckableMessage {
 impl AckableMessage {
     // TODO: return simple message
     pub async fn ack(self) -> anyhow::Result<()> {
+        // TODO: bubble errors
         let _ = self.ack.send(self.offset);
         Ok(())
     }

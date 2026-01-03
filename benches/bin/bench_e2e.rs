@@ -1,4 +1,6 @@
 use std::{
+    collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
     sync::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -10,7 +12,10 @@ use fibril_broker::coordination::NoopCoordination;
 use fibril_broker::{AckRequest, ConsumerConfig};
 use fibril_broker::{Broker, BrokerConfig, ConsumerHandle};
 use fibril_metrics::{Metrics, MetricsConfig};
-use fibril_storage::{DeliveryTag, make_rocksdb_store, observable_storage::ObservableStorage};
+use fibril_storage::{
+    DeliveryTag, Offset, make_rocksdb_store, make_stroma_store,
+    observable_storage::ObservableStorage,
+};
 
 use clap::{Parser, ValueEnum};
 use fibril_util::init_tracing;
@@ -59,7 +64,7 @@ pub struct E2EBench {
     #[arg(long, default_value = "false")]
     pub sync_write: bool,
 
-    #[arg(long, default_value = "10000")]
+    #[arg(long, default_value = "16384")]
     pub producer_inflight: usize,
 
     #[arg(long, default_value = "1")]
@@ -107,7 +112,6 @@ struct BenchMetrics {
     consumed: AtomicU64,
     acked: AtomicU64,
     inflight: AtomicUsize,
-    duplicates: AtomicU64,
 
     start: Instant,
 
@@ -124,7 +128,6 @@ impl BenchMetrics {
             consumed: AtomicU64::new(0),
             acked: AtomicU64::new(0),
             inflight: AtomicUsize::new(0),
-            duplicates: AtomicU64::new(0),
 
             start: Instant::now(),
             publish_done_at: AtomicU64::new(0),
@@ -139,13 +142,15 @@ fn mark_done_once(slot: &AtomicU64, start: Instant) {
     let _ = slot.compare_exchange(0, elapsed, Ordering::Relaxed, Ordering::Relaxed);
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn producer_task(
     broker: Arc<Broker<NoopCoordination>>,
     topic: String,
     producer_id: u32,
-    start_id: u64,
-    count: u64,
+    produce_counter: Arc<AtomicU64>,
+    total: u64,
     inflight_limit: usize,
+    prod_id_tx: tokio::sync::mpsc::UnboundedSender<(u64, u32)>,
     metrics: Arc<BenchMetrics>,
 ) {
     let (publisher, mut confirm_stream) = broker.get_publisher(&topic).await.unwrap();
@@ -161,47 +166,61 @@ async fn producer_task(
         }
     });
 
-    for i in 0..count {
+    let mut msg_id;
+    loop {
         while metrics.inflight.load(Ordering::Relaxed) >= inflight_limit {
             tokio::task::yield_now().await;
         }
 
-        let msg_id = start_id + i;
-        let size = fastrand::usize(32..256);
+        msg_id = produce_counter.fetch_add(1, Ordering::SeqCst);
+        if msg_id >= total {
+            break;
+        }
+        let size = 512;
         let payload = make_payload(msg_id, producer_id, size);
+
+        publisher.publish(payload).await.unwrap();
+        prod_id_tx.send((msg_id, producer_id)).unwrap();
 
         metrics.inflight.fetch_add(1, Ordering::Relaxed);
         metrics.published.fetch_add(1, Ordering::Relaxed);
-
-        publisher.publish(payload).await.unwrap();
     }
 
-    if metrics.published.load(Ordering::Relaxed) >= start_id + count {
+    if msg_id == total {
         mark_done_once(&metrics.publish_done_at, metrics.start);
     }
 }
 
+#[must_use]
 async fn consumer_task(
     mut consumer: ConsumerHandle,
     ack_mode: AckMode,
     metrics: Arc<BenchMetrics>,
     total: u64,
+    res_tx: tokio::sync::mpsc::UnboundedSender<(Offset, DeliveryTag, Vec<u8>)>,
 ) {
-    let (ackq_tx, mut ackq_rx) = tokio::sync::mpsc::channel::<DeliveryTag>(10_000);
+    // tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-    // One task that actually sends acks
-    let acker = consumer.acker.clone();
-    let metrics2 = metrics.clone();
-    tokio::spawn(async move {
-        while let Some(tag) = ackq_rx.recv().await {
-            let req = AckRequest { delivery_tag: tag };
-            if acker.send(req).await.is_ok() {
-                metrics2.acked.fetch_add(1, Ordering::Relaxed);
+    let (ackq_tx, mut ackq_rx) = tokio::sync::mpsc::channel::<DeliveryTag>(100_000);
+
+    if let AckMode::Async = ack_mode {
+        // One task that actually sends acks
+        let acker = consumer.acker.clone();
+        let metrics2 = metrics.clone();
+        tokio::spawn(async move {
+            while let Some(tag) = ackq_rx.recv().await {
+                let req = AckRequest { delivery_tag: tag };
+                if acker.send(req).await.is_ok() {
+                    metrics2.acked.fetch_add(1, Ordering::Relaxed);
+                }
             }
-        }
-    });
+        });
+    }
 
     while let Some(msg) = consumer.messages.recv().await {
+        res_tx
+            .send((msg.message.offset, msg.delivery_tag, msg.message.payload))
+            .unwrap();
         let c = metrics.consumed.fetch_add(1, Ordering::Relaxed) + 1;
         if c == total {
             mark_done_once(&metrics.consume_done_at, metrics.start);
@@ -241,13 +260,12 @@ async fn reporter(
         ticker.tick().await;
         let acked = metrics.acked.load(Ordering::Relaxed);
         tracing::info!(
-            "pub={} conf={} inflight={} cons={} ack={} dup={} upper={}",
+            "pub={} conf={} inflight={} cons={} ack={} upper={}",
             metrics.published.load(Ordering::Relaxed),
             metrics.confirmed.load(Ordering::Relaxed),
             metrics.inflight.load(Ordering::Relaxed),
             metrics.consumed.load(Ordering::Relaxed),
             acked,
-            metrics.duplicates.load(Ordering::Relaxed),
             upper
         );
 
@@ -261,10 +279,10 @@ async fn make_broker_with_cfg(cmd: &E2EBench) -> Broker<NoopCoordination> {
     let mut cfg = BrokerConfig {
         publish_batch_size: cmd.batch_size,
         publish_batch_timeout_ms: cmd.batch_timeout_ms,
-        ack_batch_size: 1024,
-        ack_batch_timeout_ms: 25,
-        inflight_batch_size: 1024,
-        inflight_batch_timeout_ms: 25,
+        ack_batch_size: 8192,
+        ack_batch_timeout_ms: 15,
+        inflight_batch_size: 8192,
+        inflight_batch_timeout_ms: 15,
         inflight_ttl_secs: 60,
         cleanup_interval_secs: 5,
         ..Default::default()
@@ -277,7 +295,8 @@ async fn make_broker_with_cfg(cmd: &E2EBench) -> Broker<NoopCoordination> {
     let _ = std::fs::remove_dir_all(&db_path);
     std::fs::create_dir_all(&db_path).unwrap();
 
-    let store = make_rocksdb_store(&db_path, cmd.sync_write).unwrap();
+    // let store = make_rocksdb_store(&db_path, cmd.sync_write).unwrap();
+    let store = make_stroma_store(&db_path, cmd.sync_write).await.unwrap();
     let metrics = Metrics::new(60 * 60);
     let store = Arc::new(ObservableStorage::new(store, metrics.storage()));
     let coord = NoopCoordination {};
@@ -305,8 +324,12 @@ async fn run_e2e_bench(cmd: E2EBench) {
     let topic = format!("bench_topic_{}", fastrand::u64(..));
 
     // Consumers
-    for i in 0..cmd.consumers {
+    let mut c_handles = vec![];
+    let (res_tx, mut res_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(Offset, DeliveryTag, Vec<u8>)>();
+    for _ in 0..cmd.consumers {
         // let topic = format!("{}_{}", topic, i);
+        let res_tx = res_tx.clone();
         let consumer = broker
             .subscribe(
                 &topic,
@@ -315,29 +338,37 @@ async fn run_e2e_bench(cmd: E2EBench) {
             )
             .await
             .unwrap();
-        tokio::spawn(consumer_task(
+        let c_handle = tokio::spawn(consumer_task(
             consumer,
             cmd.ack_mode.clone(),
             metrics.clone(),
             cmd.messages,
+            res_tx,
         ));
+        c_handles.push(c_handle);
     }
 
     // Producers
-    let per_producer = cmd.messages / cmd.producers as u64;
+    let produce_counter = Arc::new(AtomicU64::new(0));
 
+    let (prod_id_tx, mut prod_id_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, u32)>();
     for p in 0..cmd.producers {
+        let prod_id_tx = prod_id_tx.clone();
+        let produce_counter = produce_counter.clone();
         // let topic = format!("{}_{}", topic, p);
         tokio::spawn(producer_task(
             broker.clone(),
             topic.clone(),
             p as u32,
-            p as u64 * per_producer,
-            per_producer,
+            produce_counter,
+            cmd.messages,
             cmd.producer_inflight,
+            prod_id_tx,
             metrics.clone(),
         ));
     }
+
+    drop(prod_id_tx);
 
     // Reporter
     let handle = tokio::spawn(reporter(
@@ -384,8 +415,92 @@ async fn run_e2e_bench(cmd: E2EBench) {
     broker.forced_cleanup(&topic, partition).await.unwrap();
 
     broker_clone.dump_meta_keys().await;
+    broker.shutdown().await;
+
+    drop(res_tx);
+    // let mut received = vec![];
+    for c_handle in c_handles {
+        c_handle.await.unwrap();
+    }
+
+    let mut received: Vec<(u64, DeliveryTag, Vec<u8>)> = vec![];
+    let mut got = res_rx.recv_many(&mut received, 10_000_000).await;
+    while got > 0 {
+        tracing::info!("Got msgs: {}", got);
+        got = res_rx.recv_many(&mut received, 10_000_000).await;
+    }
+
+    let mut seen = HashSet::with_capacity(received.len());
+    let mut dup_offsets = 0usize;
+
+    for (off, _, _) in &received {
+        if !seen.insert(*off) {
+            dup_offsets += 1;
+        }
+    }
+    drop(seen);
+
+    tracing::info!("duplicate offsets: {}", dup_offsets);
+
+    let mut seen = HashSet::with_capacity(received.len());
+    let mut dup = 0usize;
+
+    for (off, tag, _) in &received {
+        if !seen.insert((*off, *tag)) {
+            dup += 1;
+        }
+    }
+
+    tracing::info!("duplicate delivery tags: {}", dup);
+    drop(seen);
+
+    let mut seen = HashMap::with_capacity(received.len());
+    let mut payload_dupes = 0usize;
+
+    let mut received_prod_ids = vec![];
+    for (off, _, payload) in &received {
+        let mut h = std::hash::DefaultHasher::new();
+        payload.hash(&mut h);
+        let fp = h.finish();
+
+        received_prod_ids.push(decode_payload(payload));
+
+        if let Some(prev_off) = seen.insert(fp, *off) {
+            payload_dupes += 1;
+            tracing::info!("payload dup: prev_off={} now_off={}", prev_off, off);
+        }
+    }
+    drop(seen);
+    drop(received);
+
+    tracing::info!("payload-level duplicates: {}", payload_dupes);
+
+    let mut prod_ids: Vec<(u64, u32)> = vec![];
+    let mut got = prod_id_rx.recv_many(&mut prod_ids, 10_000_000).await;
+    while got > 0 {
+        tracing::info!("Got prod ids: {}", got);
+        got = prod_id_rx.recv_many(&mut prod_ids, 10_000_000).await;
+    }
+
+    received_prod_ids.sort();
+    prod_ids.sort();
+
+    if received_prod_ids.len() != prod_ids.len() {
+        tracing::info!(
+            "received_prod_ids.len() {} != prod_ids.len() {}",
+            received_prod_ids.len(),
+            prod_ids.len()
+        );
+    }
+
+    if received_prod_ids != prod_ids {
+        tracing::info!("received_prod_ids != prod_ids");
+    }
+    drop(prod_ids);
+    drop(received_prod_ids);
 
     tracing::info!("Bench complete.");
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]

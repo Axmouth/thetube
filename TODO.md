@@ -1,3 +1,7 @@
+deny topic etc names beyond simple fs compatible setups
+
+test big payloads
+
 TODO:
 Broker should no longer:
 loop compute_start_offset() by calling is_inflight_or_acked() repeatedly.
