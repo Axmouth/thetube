@@ -1,9 +1,10 @@
 use fibril_metrics::*;
 use fibril_util::UnixMillis;
+use stroma_core::{AppendCompletion, IoError};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::{AppendReceiptExt, Group, LogId, Offset, Storage, StorageError, StoredMessage, Topic};
+use crate::{Group, LogId, Offset, Storage, StorageError, StoredMessage, Topic};
 
 macro_rules! observe {
     ($stats:expr, $field:ident, $call:expr) => {{
@@ -39,20 +40,18 @@ impl<S> ObservableStorage<S> {
 }
 
 #[async_trait::async_trait]
-impl<O, S: Storage<O>> Storage<O> for ObservableStorage<S>
-where
-    O: AppendReceiptExt<Offset>,
-{
+impl<S: Storage> Storage for ObservableStorage<S> {
     async fn append_enqueue(
         &self,
         topic: &Topic,
         partition: LogId,
         payload: &[u8],
-    ) -> Result<O, StorageError> {
+        completion: Box<dyn AppendCompletion<IoError>>,
+    ) -> Result<(), StorageError> {
         observe!(
             self.stats,
             writes,
-            self.inner().append_enqueue(topic, partition, payload)
+            self.inner().append_enqueue(topic, partition, payload, completion)
         )
     }
 

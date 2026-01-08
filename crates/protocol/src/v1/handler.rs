@@ -33,10 +33,9 @@ struct SubState {
 
 pub async fn run_server<
     C: Coordination + Send + Sync + 'static,
-    O: AppendReceiptExt<Offset> + 'static,
 >(
     addr: SocketAddr,
-    broker: Arc<Broker<C, O>>,
+    broker: Arc<Broker<C>>,
     tcp_stats: Arc<TcpStats>,
     connection_stats: Arc<ConnectionStats>,
     auth: Option<impl AuthHandler + Send + Sync + Clone + 'static>,
@@ -74,10 +73,9 @@ pub async fn run_server<
 
 pub async fn handle_connection<
     C: Coordination + Send + Sync + 'static,
-    O: AppendReceiptExt<Offset> + 'static,
 >(
     socket: tokio::net::TcpStream,
-    broker: Arc<Broker<C, O>>,
+    broker: Arc<Broker<C>>,
     tcp_stats: Arc<TcpStats>,
     connection_stats: Arc<ConnectionStats>,
     conn_id: Uuid,

@@ -7,8 +7,7 @@ use async_trait::async_trait;
 use fibril_util::UnixMillis;
 use serde::{Deserialize, Serialize};
 
-pub use stroma_core::AppendReceipt;
-pub use stroma_core::AppendReceipt as AppendReceiptS;
+pub use stroma_core::{AppendCompletion, AppendResult, CompletionPair, IoError};
 
 pub type Topic = String;
 pub type LogId = u32;
@@ -90,21 +89,33 @@ impl AppendReceiptExt<Offset> for StorageAppendReceipt<Offset> {
     }
 }
 
-#[async_trait]
-impl AppendReceiptExt<Offset> for stroma_core::AppendReceipt {
-    async fn wait(self) -> Result<Offset, StorageError> {
-        self.wait()
-            .await
-            .map_err(|e| StorageError::Internal(e.to_string()))
-            .map(|v| v.base_offset)
+pub struct BrokerCompletion {
+    tx: tokio::sync::oneshot::Sender<Result<AppendResult, IoError>>,
+}
+
+impl AppendCompletion<IoError> for BrokerCompletion {
+    fn complete(self: Box<Self>, res: Result<AppendResult, IoError>) {
+        let _ = self.tx.send(res);
+    }
+}
+
+pub struct BrokerCompletionPair;
+
+impl CompletionPair<IoError> for BrokerCompletionPair {
+    type Receiver = tokio::sync::oneshot::Receiver<Result<AppendResult, IoError>>;
+
+    fn pair() -> (Box<dyn AppendCompletion<IoError>>, Self::Receiver) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            Box::new(BrokerCompletion { tx }),
+            rx,
+        )
     }
 }
 
 /// Defines the persistent storage API for a durable queue system.
 #[async_trait]
-pub trait Storage<O>: Send + Sync + std::fmt::Debug
-where
-    O: AppendReceiptExt<Offset>,
+pub trait Storage: Send + Sync + std::fmt::Debug
 {
     /// Append a message to the end of a topic/partition log asynchronously(a receipt is returned that can be used to await batch commit).
     async fn append_enqueue(
@@ -112,7 +123,8 @@ where
         topic: &Topic,
         partition: LogId,
         payload: &[u8],
-    ) -> Result<O, StorageError>;
+        completion: Box<dyn AppendCompletion<IoError>>,
+    ) -> Result<(), StorageError>;
 
     /// Append a message to the end of a topic/partition log.
     async fn append(

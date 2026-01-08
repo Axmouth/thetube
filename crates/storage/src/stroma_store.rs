@@ -4,10 +4,9 @@ use async_trait::async_trait;
 use fibril_util::unix_millis;
 
 use crate::{
-    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError, StoredMessage,
-    Topic, UnixMillis,
+    BrokerCompletionPair, DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError, StoredMessage, Topic, UnixMillis
 };
-use stroma_core::{AppendReceipt, Durability, KeratinConfig, SnapshotConfig, Stroma, StromaError};
+use stroma_core::{AppendCompletion, CompletionPair, Durability, IoError, KeratinConfig, SnapshotConfig, Stroma, StromaError};
 
 #[derive(Debug, Clone)]
 pub struct StromaStorage {
@@ -19,10 +18,10 @@ impl StromaStorage {
         let keratin_cfg = KeratinConfig {
             segment_max_bytes: 256 * 1024 * 1024,
             index_stride_bytes: 64 * 1024,
-            max_batch_bytes: 4 * 1024 * 1024,
-            max_batch_records: 2048,
-            batch_linger_ms: 5,
-            fsync_interval_ms: 2,
+            max_batch_bytes: 32 * 1024 * 1024,
+            max_batch_records: 8192,
+            batch_linger_ms: 25,
+            fsync_interval_ms: 25,
             flush_target_bytes: 32 * 1024 * 1024,
             default_durability: (if sync_write {
                 Durability::AfterFsync
@@ -51,22 +50,24 @@ impl StromaStorage {
 }
 
 #[async_trait]
-impl Storage<AppendReceipt> for StromaStorage {
+impl Storage for StromaStorage {
     async fn append(
         &self,
         topic: &Topic,
         partition: LogId,
         payload: &[u8],
     ) -> Result<Offset, StorageError> {
-        let ar = self
+        let (completion, rx) = BrokerCompletionPair::pair();
+        self
             .inner
-            .append_message(topic, partition, payload)
+            .append_message(topic, partition, payload, completion)
             .await
             .map_err(Self::map_err)?;
 
-        Ok(ar
-            .wait()
+        Ok(rx
             .await
+            .map_err(|e| StromaError::Io(e.to_string()))
+            .map_err(Self::map_err)?
             .map_err(|e| StromaError::Io(e.to_string()))
             .map_err(Self::map_err)?
             .base_offset)
@@ -77,11 +78,13 @@ impl Storage<AppendReceipt> for StromaStorage {
         topic: &Topic,
         partition: LogId,
         payload: &[u8],
-    ) -> Result<AppendReceipt, StorageError> {
+        completion: Box<dyn AppendCompletion<IoError>>,
+    ) -> Result<(), StorageError> {
         self.inner
-            .append_message(topic, partition, payload)
+            .append_message(topic, partition, payload, completion)
             .await
-            .map_err(Self::map_err)
+            .map_err(Self::map_err)?;
+        Ok(())
     }
 
     async fn append_batch(

@@ -143,8 +143,8 @@ fn mark_done_once(slot: &AtomicU64, start: Instant) {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn producer_task<O>(
-    broker: Arc<Broker<NoopCoordination, O>>,
+async fn producer_task(
+    broker: Arc<Broker<NoopCoordination>>,
     topic: String,
     producer_id: u32,
     produce_counter: Arc<AtomicU64>,
@@ -152,8 +152,7 @@ async fn producer_task<O>(
     inflight_limit: usize,
     prod_id_tx: tokio::sync::mpsc::UnboundedSender<(u64, u32)>,
     metrics: Arc<BenchMetrics>,
-) where
-    O: AppendReceiptExt<Offset> + 'static,
+)
 {
     let (publisher, mut confirm_stream) = broker.get_publisher(&topic).await.unwrap();
 
@@ -248,14 +247,13 @@ async fn consumer_task(
     }
 }
 
-async fn reporter<O>(
+async fn reporter(
     metrics: Arc<BenchMetrics>,
-    broker: Arc<Broker<NoopCoordination, O>>,
+    broker: Arc<Broker<NoopCoordination>>,
     topic: String,
     interval: u64,
     total: u64,
-) where
-    O: AppendReceiptExt<Offset> + 'static,
+)
 {
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
     let upper = broker.debug_upper(&topic, 0).await;
@@ -281,7 +279,7 @@ async fn reporter<O>(
 
 async fn make_broker_with_cfg(
     cmd: E2EBench,
-) -> Broker<NoopCoordination, impl AppendReceiptExt<Offset>> {
+) -> Broker<NoopCoordination> {
     let mut cfg = BrokerConfig {
         publish_batch_size: cmd.batch_size,
         publish_batch_timeout_ms: cmd.batch_timeout_ms,

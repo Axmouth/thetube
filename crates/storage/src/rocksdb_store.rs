@@ -6,10 +6,11 @@ use rocksdb::{
     MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 use std::sync::Arc;
+use stroma_core::{AppendCompletion, AppendResult, IoError};
 
 use crate::{
-    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageAppendReceipt,
-    StorageError, StoredMessage, Topic,
+    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError,
+    StoredMessage, Topic,
 };
 
 #[derive(Debug, Clone)]
@@ -199,15 +200,14 @@ impl RocksStorage {
 }
 
 #[async_trait]
-impl Storage<StorageAppendReceipt<Offset>> for RocksStorage {
+impl Storage for RocksStorage {
     async fn append_enqueue(
         &self,
         topic: &Topic,
         partition: LogId,
         payload: &[u8],
-    ) -> Result<StorageAppendReceipt<Offset>, StorageError> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let ar = StorageAppendReceipt { result_rx: rx };
+        completion: Box<dyn AppendCompletion<IoError>>,
+    ) -> Result<(), StorageError> {
         let topic = topic.clone();
         let payload = payload.to_vec();
         let db = self.db.clone();
@@ -242,10 +242,17 @@ impl Storage<StorageAppendReceipt<Offset>> for RocksStorage {
             }
             .await;
 
-            let _ = tx.send(res);
+            completion
+                .complete(
+                    res.map_err(|e| IoError::new(e.to_string()))
+                        .map(|off| AppendResult {
+                            base_offset: off,
+                            count: 1,
+                        }),
+                );
         });
 
-        Ok(ar)
+        Ok(())
     }
 
     async fn append(

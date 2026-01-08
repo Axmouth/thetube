@@ -4,19 +4,18 @@ use crossbeam::queue::SegQueue;
 use dashmap::DashMap;
 use fibril_metrics::BrokerStats;
 use std::{
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use fibril_storage::{BrokerCompletionPair, CompletionPair};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::coordination::Coordination;
 use fibril_storage::{
-    AppendReceiptExt, DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError,
-    Topic,
+    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError, Topic
 };
 use fibril_util::{UnixMillis, unix_millis};
 
@@ -232,11 +231,9 @@ impl ConfirmStream {
     }
 }
 
-struct DeliveryCtx<O>
-where
-    O: AppendReceiptExt<Offset> + 'static,
+struct DeliveryCtx
 {
-    storage: Arc<dyn Storage<O>>,
+    storage: Arc<dyn Storage>,
     group_state: Arc<GroupState>,
     topic: Topic,
     group: Group,
@@ -293,9 +290,11 @@ impl TaskGroup {
 
 // TODO: Injectable clock for testing
 #[derive(Debug)]
-pub struct Broker<C: Coordination + Send + Sync + 'static, O: AppendReceiptExt<Offset> + 'static> {
+pub struct Broker<
+    C: Coordination + Send + Sync + 'static,
+> {
     pub config: BrokerConfig,
-    storage: Arc<dyn Storage<O>>,
+    storage: Arc<dyn Storage>,
     coord: Arc<C>,
     metrics: Arc<BrokerStats>,
     // TODO: Add partition to groups key for corrected and independent cursors
@@ -308,9 +307,11 @@ pub struct Broker<C: Coordination + Send + Sync + 'static, O: AppendReceiptExt<O
     next_sub_id: AtomicU64,
 }
 
-impl<C: Coordination + Send + Sync + 'static, O: AppendReceiptExt<Offset> + 'static> Broker<C, O> {
+impl<C: Coordination + Send + Sync + 'static>
+    Broker<C>
+{
     pub async fn try_new(
-        storage: Arc<impl Storage<O> + 'static>,
+        storage: Arc<impl Storage + 'static>,
         coord: C,
         metrics: Arc<BrokerStats>,
         config: BrokerConfig,
@@ -878,49 +879,56 @@ impl<C: Coordination + Send + Sync + 'static, O: AppendReceiptExt<Offset> + 'sta
 
         let metrics = self.metrics.clone();
         self.task_group.spawn(async move {
-            let mut pending: Vec<PublishRequest> = Vec::new();
-            let mut timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
-
             loop {
+                let metrics = metrics.clone();
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
 
                     maybe = rx.recv() => {
                         match maybe {
-                            Some(msg) => {
-                                pending.push(msg);
-
-                                // arm timer on first message
-                                if pending.len() == 1 && cfg.publish_batch_timeout_ms > 0 {
-                                    timer = Some(Box::pin(tokio::time::sleep(
-                                        tokio::time::Duration::from_millis(cfg.publish_batch_timeout_ms)
-                                    )));
-                                }
-
-                                // size-based flush
-                                if pending.len() >= cfg.publish_batch_size {
-                                    flush_publish_batch(&storage, groups.clone(), &topic, partition, &mut pending, metrics.clone()).await;
-                                    timer = None;
+                            Some(PublishRequest { payload, reply }) => {
+                                let (completion, rx) = BrokerCompletionPair::pair();
+                                match storage.append_enqueue(&topic, partition, &payload, completion).await {
+                                    Ok(()) => {
+                                        // TODO: move all this logic to the publisher?
+                                        // TODO: Single task to await completions with queue?
+                                        let topic = topic.clone();
+                                        let groups = groups.clone();
+                                        tokio::spawn(async move {
+                                            match rx.await {
+                                                Ok(res) => {
+                                                    // success
+                                                    if res.is_ok() {
+                                                        metrics.published();
+                                                        // metrics.publish_payload(payload.len() as u64);
+                                                    }
+                                                    let _ = reply.send(res.map(|r| r.base_offset).map_err(|_e| BrokerError::ChannelClosed));
+                                                },
+                                                Err(_err) => {
+                                                    // append failed
+                                                    let _ = reply.send(Err(BrokerError::ChannelClosed));
+                                                    return;
+                                                }
+                                            }
+                                            for entry in groups.iter() {
+                                                let ((t, _g), gs) = entry.pair();
+                                                if t == &topic {
+                                                    gs.signal();
+                                                }
+                                            }
+                                        });
+                                    },
+                                    Err(err) => {
+                                        let _ = reply.send(Err(err.into()));
+                                    },
                                 }
                             }
 
                             None => {
-                                // channel closed: flush remaining
-                                if !pending.is_empty() {
-                                    flush_publish_batch(&storage, groups.clone(), &topic, partition, &mut pending,  metrics.clone()).await;
-                                }
+                                // channel closed
                                 break;
                             }
                         }
-                    }
-
-                    // timer-based flush
-                    // TODO: refactor unwrap
-                    _ = async { timer.as_mut().unwrap().as_mut().await }, if timer.is_some() => {
-                        if !pending.is_empty() {
-                            flush_publish_batch(&storage, groups.clone(), &topic, partition, &mut pending,  metrics.clone()).await;
-                        }
-                        timer = None;
                     }
                 }
             }
@@ -943,8 +951,8 @@ impl<C: Coordination + Send + Sync + 'static, O: AppendReceiptExt<Offset> + 'sta
     }
 }
 
-async fn flush_publish_batch<O: AppendReceiptExt<Offset>>(
-    storage: &Arc<dyn Storage<O>>,
+async fn flush_publish_batch(
+    storage: &Arc<dyn Storage>,
     groups: Arc<DashMap<(String, String), Arc<GroupState>>>,
     topic: &Topic,
     partition: u32,
@@ -993,8 +1001,8 @@ async fn flush_publish_batch<O: AppendReceiptExt<Offset>>(
     }
 }
 
-async fn flush_ack_batch<O: AppendReceiptExt<Offset>>(
-    storage: &Arc<dyn Storage<O>>,
+async fn flush_ack_batch(
+    storage: &Arc<dyn Storage>,
     topic: &String,
     group: &String,
     buf: &mut Vec<Offset>,
@@ -1017,8 +1025,8 @@ async fn flush_ack_batch<O: AppendReceiptExt<Offset>>(
     buf.clear();
 }
 
-async fn compute_start_offset<O: AppendReceiptExt<Offset>>(
-    storage: &Arc<impl Storage<O> + ?Sized>,
+async fn compute_start_offset(
+    storage: &Arc<impl Storage + ?Sized>,
     topic: &str,
     partition: u32,
     group: &str,
@@ -1047,7 +1055,7 @@ pub fn maybe_auto_ack(auto_ack: bool, ack_tx: &mpsc::Sender<AckRequest>, tag: De
     }
 }
 
-async fn process_redeliveries<O: AppendReceiptExt<Offset>>(ctx: &DeliveryCtx<O>) -> bool {
+async fn process_redeliveries(ctx: &DeliveryCtx) -> bool {
     let DeliveryCtx {
         storage,
         group_state,
@@ -1148,7 +1156,7 @@ async fn process_redeliveries<O: AppendReceiptExt<Offset>>(ctx: &DeliveryCtx<O>)
     delivered_any
 }
 
-async fn process_fresh_deliveries<O: AppendReceiptExt<Offset>>(ctx: &DeliveryCtx<O>) -> bool {
+async fn process_fresh_deliveries(ctx: &DeliveryCtx) -> bool {
     let DeliveryCtx {
         storage,
         group_state,
