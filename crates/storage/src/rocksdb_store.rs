@@ -9,8 +9,8 @@ use std::sync::Arc;
 use stroma_core::{AppendCompletion, AppendResult, IoError};
 
 use crate::{
-    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError,
-    StoredMessage, Topic,
+    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError, StoredMessage,
+    Topic,
 };
 
 #[derive(Debug, Clone)]
@@ -242,14 +242,12 @@ impl Storage for RocksStorage {
             }
             .await;
 
-            completion
-                .complete(
-                    res.map_err(|e| IoError::new(e.to_string()))
-                        .map(|off| AppendResult {
-                            base_offset: off,
-                            count: 1,
-                        }),
-                );
+            completion.complete(res.map_err(|e| IoError::new(e.to_string())).map(|off| {
+                AppendResult {
+                    base_offset: off,
+                    count: 1,
+                }
+            }));
         });
 
         Ok(())

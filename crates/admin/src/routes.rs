@@ -15,13 +15,10 @@ pub struct OverviewResponse {
     pub storage_used: u64,
 }
 
-pub async fn overview<O>(
-    State(server): State<Arc<AdminServer<O>>>,
+pub async fn overview(
+    State(server): State<Arc<AdminServer>>,
     headers: axum::http::HeaderMap,
-) -> Result<Json<OverviewResponse>, StatusCode>
-where
-    O: AppendReceiptExt<Offset> + 'static,
-{
+) -> Result<Json<OverviewResponse>, StatusCode> {
     check_basic_auth(&headers, &server.config.auth).await?;
 
     Ok(Json(OverviewResponse {
@@ -36,25 +33,19 @@ where
     }))
 }
 
-pub async fn connections<O>(
-    State(server): State<Arc<AdminServer<O>>>,
+pub async fn connections(
+    State(server): State<Arc<AdminServer>>,
     headers: axum::http::HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode>
-where
-    O: AppendReceiptExt<Offset> + 'static,
-{
+) -> Result<Json<serde_json::Value>, StatusCode> {
     check_basic_auth(&headers, &server.config.auth).await?;
 
     Ok(Json(server.metrics.connections().snapshot()))
 }
 
-pub async fn subscriptions<O>(
-    State(server): State<Arc<AdminServer<O>>>,
+pub async fn subscriptions(
+    State(server): State<Arc<AdminServer>>,
     headers: axum::http::HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode>
-where
-    O: AppendReceiptExt<Offset> + 'static,
-{
+) -> Result<Json<serde_json::Value>, StatusCode> {
     check_basic_auth(&headers, &server.config.auth).await?;
 
     Ok(Json(server.metrics.connections().snapshot_subs()))

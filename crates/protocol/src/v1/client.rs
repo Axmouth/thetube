@@ -88,7 +88,7 @@ pub async fn demo_client(mut conn: Conn) -> anyhow::Result<()> {
                         topic: d.topic.clone(),
                         group: d.group.clone(),
                         partition: d.partition,
-                        tags: vec![DeliveryTag { epoch: d.epoch }],
+                        tags: vec![d.delivery_tag],
                     },
                 ))
                 .await?;

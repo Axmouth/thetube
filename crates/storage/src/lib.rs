@@ -99,6 +99,7 @@ impl AppendCompletion<IoError> for BrokerCompletion {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct BrokerCompletionPair;
 
 impl CompletionPair<IoError> for BrokerCompletionPair {
@@ -106,17 +107,13 @@ impl CompletionPair<IoError> for BrokerCompletionPair {
 
     fn pair() -> (Box<dyn AppendCompletion<IoError>>, Self::Receiver) {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        (
-            Box::new(BrokerCompletion { tx }),
-            rx,
-        )
+        (Box::new(BrokerCompletion { tx }), rx)
     }
 }
 
 /// Defines the persistent storage API for a durable queue system.
 #[async_trait]
-pub trait Storage: Send + Sync + std::fmt::Debug
-{
+pub trait Storage: Send + Sync + std::fmt::Debug {
     /// Append a message to the end of a topic/partition log asynchronously(a receipt is returned that can be used to await batch commit).
     async fn append_enqueue(
         &self,

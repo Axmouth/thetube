@@ -23,10 +23,10 @@ pub struct AdminConfig {
     pub auth: Option<StaticAuthHandler>,
 }
 
-pub struct AdminServer<O: AppendReceiptExt<Offset> + 'static> {
+pub struct AdminServer {
     pub metrics: Metrics,
     pub config: AdminConfig,
-    pub storage: Arc<dyn Storage<O>>,
+    pub storage: Arc<dyn Storage>,
 }
 
 fn render<T: Template>(tpl: T) -> Html<String> {
@@ -39,8 +39,8 @@ fn render<T: Template>(tpl: T) -> Html<String> {
     }
 }
 
-impl<O: AppendReceiptExt<Offset> + 'static> AdminServer<O> {
-    pub fn new(metrics: Metrics, config: AdminConfig, storage: Arc<dyn Storage<O>>) -> Self {
+impl AdminServer {
+    pub fn new(metrics: Metrics, config: AdminConfig, storage: Arc<dyn Storage>) -> Self {
         Self {
             metrics,
             config,

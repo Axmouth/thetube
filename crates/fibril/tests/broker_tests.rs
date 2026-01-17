@@ -9,7 +9,7 @@ use fibril_util::unix_millis;
 use tokio::task::JoinHandle;
 
 // TODO: make shared
-async fn make_test_store() -> anyhow::Result<impl Storage<AppendReceiptS>> {
+async fn make_test_store() -> anyhow::Result<impl Storage> {
     // make testdata dir
     std::fs::create_dir_all("test_data")?;
     // make random temp filename to avoid conflicts
@@ -20,8 +20,7 @@ async fn make_test_store() -> anyhow::Result<impl Storage<AppendReceiptS>> {
     Ok(res?)
 }
 
-async fn make_test_broker()
--> anyhow::Result<Broker<NoopCoordination, impl AppendReceiptExt<Offset>>> {
+async fn make_test_broker() -> anyhow::Result<Broker<NoopCoordination>> {
     let store = Arc::new(make_test_store().await?);
     let metrics = Metrics::new(60 * 60);
     Ok(Broker::try_new(
@@ -45,7 +44,7 @@ async fn make_test_broker()
 
 async fn make_test_broker_with_cfg(
     config: BrokerConfig,
-) -> anyhow::Result<Broker<NoopCoordination, AppendReceiptS>> {
+) -> anyhow::Result<Broker<NoopCoordination>> {
     let store = Arc::new(make_test_store().await?);
     let metrics = Metrics::new(60 * 60);
     Ok(Broker::try_new(store, NoopCoordination, metrics.broker(), config).await?)
@@ -78,8 +77,9 @@ async fn broker_basic_delivery() -> anyhow::Result<()> {
             .context("receiving message")?;
         received.push(String::from_utf8(msg.message.payload.clone())?);
         consumer
-            .acker
-            .send(AckRequest {
+            .settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -106,8 +106,9 @@ async fn broker_ack_behavior() -> anyhow::Result<()> {
         .context("receiving message")?;
     assert_eq!(m1.message.payload, b"a");
     consumer
-        .acker
-        .send(AckRequest {
+        .settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: m1.delivery_tag,
         })
         .await?;
@@ -120,8 +121,9 @@ async fn broker_ack_behavior() -> anyhow::Result<()> {
         .context("receiving message")?;
     assert_eq!(m2.message.payload, b"b");
     consumer
-        .acker
-        .send(AckRequest {
+        .settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: m2.delivery_tag,
         })
         .await?;
@@ -157,16 +159,20 @@ async fn broker_work_queue_distribution() -> anyhow::Result<()> {
     // Collect 6 messages total (in any order)
     for _ in 0..6 {
         tokio::select! {
-            Some(msg) = c1.messages.recv() => {
-                got1 += 1;
-                c1.acker.send(AckRequest { delivery_tag: msg.delivery_tag }).await?;
-            }
-            Some(msg) = c2.messages.recv() => {
-                got2 += 1;
-                c2.acker.send(AckRequest { delivery_tag: msg.delivery_tag }).await?;
-            }
-            else => anyhow::bail!("all consumers closed unexpectedly"),
-        }
+                    Some(msg) = c1.messages.recv() => {
+                        println!("Recv 1");
+                        got1 += 1;
+                        c1.settler.send(SettleRequest {
+        settle_type: SettleType::Ack, delivery_tag: msg.delivery_tag }).await?;
+                    }
+                    Some(msg) = c2.messages.recv() => {
+                        println!("Recv 2");
+                        got2 += 1;
+                        c2.settler.send(SettleRequest {
+        settle_type: SettleType::Ack, delivery_tag: msg.delivery_tag }).await?;
+                    }
+                    else => anyhow::bail!("all consumers closed unexpectedly"),
+                }
     }
 
     // Work should be distributed, not replicated
@@ -196,16 +202,18 @@ async fn broker_pubsub_multiple_groups() -> anyhow::Result<()> {
     for _ in 0..2 {
         let m1 = g1.messages.recv().await.context("receiving message")?;
         recv_g1.push(String::from_utf8(m1.message.payload.clone())?);
-        g1.acker
-            .send(AckRequest {
+        g1.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: m1.delivery_tag,
             })
             .await?;
 
         let m2 = g2.messages.recv().await.context("receiving message")?;
         recv_g2.push(String::from_utf8(m2.message.payload.clone())?);
-        g2.acker
-            .send(AckRequest {
+        g2.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: m2.delivery_tag,
             })
             .await?;
@@ -240,8 +248,9 @@ async fn broker_delivery_in_order() -> anyhow::Result<()> {
             .context("receiving message")?;
         collected.push(String::from_utf8(msg.message.payload.clone())?);
         consumer
-            .acker
-            .send(AckRequest {
+            .settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -298,8 +307,9 @@ async fn redelivery_occurs_after_expiration() -> anyhow::Result<()> {
     assert_eq!(m2.message.payload, b"hello");
 
     // Now ACK to finish
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: m2.delivery_tag,
         })
         .await?;
@@ -317,8 +327,9 @@ async fn ack_prevents_redelivery() -> anyhow::Result<()> {
         .await?;
 
     let msg = cons.messages.recv().await.context("receiving message")?;
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: msg.delivery_tag,
         })
         .await?;
@@ -379,32 +390,37 @@ async fn selective_ack_out_of_order() -> anyhow::Result<()> {
     }
 
     // ACK out-of-order: ACK offset 3 and 4 first
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: messages[3].delivery_tag,
         })
         .await?;
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: messages[4].delivery_tag,
         })
         .await?;
 
     // ACK 0 next
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: messages[0].delivery_tag,
         })
         .await?;
 
     // ACK 2 before 1
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: messages[2].delivery_tag,
         })
         .await?;
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: messages[1].delivery_tag,
         })
         .await?;
@@ -433,8 +449,9 @@ async fn selective_ack_expiry_redelivery() -> anyhow::Result<()> {
 
     // ACK everything except offset 2
     for i in [0, 1, 3, 4] {
-        cons.acker
-            .send(AckRequest {
+        cons.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msgs[i].delivery_tag,
             })
             .await?;
@@ -448,8 +465,9 @@ async fn selective_ack_expiry_redelivery() -> anyhow::Result<()> {
     assert_eq!(redelivered.message.offset, 2);
 
     // ACK it finally
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: redelivered.delivery_tag,
         })
         .await?;
@@ -476,13 +494,15 @@ async fn selective_ack_no_wrong_rewind() -> anyhow::Result<()> {
     let m2 = cons.messages.recv().await.context("receiving message")?;
 
     // ACK 2 then 0 (skipping 1)
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: m2.delivery_tag,
         })
         .await?;
-    cons.acker
-        .send(AckRequest {
+    cons.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: m0.delivery_tag,
         })
         .await?;
@@ -628,8 +648,9 @@ async fn batch_publish_and_consume() -> anyhow::Result<()> {
     for _ in 0..12 {
         let msg = c.messages.recv().await.context("receiving message")?;
         seen.push((msg.message.offset, msg.message.payload.clone()));
-        c.acker
-            .send(AckRequest {
+        c.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -717,8 +738,9 @@ async fn publish_burst_then_consume_everything() -> anyhow::Result<()> {
     for _ in 0..total {
         let msg = c.messages.recv().await.context("receiving message")?;
         seen.push((msg.message.offset, msg.message.payload.clone()));
-        c.acker
-            .send(AckRequest {
+        c.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -792,8 +814,9 @@ async fn concurrent_publish_and_consume() -> anyhow::Result<()> {
             .await
             .context("receiving message")?;
         consumer
-            .acker
-            .send(AckRequest {
+            .settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -945,8 +968,9 @@ async fn redelivery_under_load(total: usize) -> anyhow::Result<()> {
             counts[idx] += 1;
         }
         // ACK now
-        c.acker
-            .send(AckRequest {
+        c.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -1019,8 +1043,9 @@ async fn restart_persists_messages() -> anyhow::Result<()> {
         for _ in 0..20 {
             let m = cons.messages.recv().await.context("receiving message")?;
             msgs.push(String::from_utf8(m.message.payload.clone())?);
-            cons.acker
-                .send(AckRequest {
+            cons.settler
+                .send(SettleRequest {
+                    settle_type: SettleType::Ack,
                     delivery_tag: m.delivery_tag,
                 })
                 .await?;
@@ -1073,8 +1098,9 @@ async fn restart_persists_ack_state() -> anyhow::Result<()> {
         // ACK first 7 messages
         for _ in 0..7 {
             let m = cons.messages.recv().await.context("receiving message")?;
-            cons.acker
-                .send(AckRequest {
+            cons.settler
+                .send(SettleRequest {
+                    settle_type: SettleType::Ack,
                     delivery_tag: m.delivery_tag,
                 })
                 .await?;
@@ -1106,8 +1132,9 @@ async fn restart_persists_ack_state() -> anyhow::Result<()> {
         for _ in 0..3 {
             let m = cons.messages.recv().await.context("receiving message")?;
             seen.push(String::from_utf8(m.message.payload.clone())?);
-            cons.acker
-                .send(AckRequest {
+            cons.settler
+                .send(SettleRequest {
+                    settle_type: SettleType::Ack,
                     delivery_tag: m.delivery_tag,
                 })
                 .await?;
@@ -1187,8 +1214,9 @@ async fn restart_redelivery_across_restart() -> anyhow::Result<()> {
         assert_eq!(redelivered.message.offset, offset);
         assert_eq!(redelivered.message.payload, b"hello");
 
-        cons.acker
-            .send(AckRequest {
+        cons.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: redelivered.delivery_tag,
             })
             .await?;
@@ -1232,20 +1260,23 @@ async fn work_queue_fair_distribution() -> anyhow::Result<()> {
 
     for _ in 0..total {
         tokio::select! {
-            Some(msg) = c1.messages.recv() => {
-                counts[0] += 1;
-                c1.acker.send(AckRequest { delivery_tag: msg.delivery_tag }).await?;
-            }
-            Some(msg) = c2.messages.recv() => {
-                counts[1] += 1;
-                c2.acker.send(AckRequest { delivery_tag: msg.delivery_tag }).await?;
-            }
-            Some(msg) = c3.messages.recv() => {
-                counts[2] += 1;
-                c3.acker.send(AckRequest { delivery_tag: msg.delivery_tag }).await?;
-            }
-            else => anyhow::bail!("all consumers closed unexpectedly"),
-        }
+                    Some(msg) = c1.messages.recv() => {
+                        counts[0] += 1;
+                        c1.settler.send(SettleRequest {
+        settle_type: SettleType::Ack, delivery_tag: msg.delivery_tag }).await?;
+                    }
+                    Some(msg) = c2.messages.recv() => {
+                        counts[1] += 1;
+                        c2.settler.send(SettleRequest {
+        settle_type: SettleType::Ack, delivery_tag: msg.delivery_tag }).await?;
+                    }
+                    Some(msg) = c3.messages.recv() => {
+                        counts[2] += 1;
+                        c3.settler.send(SettleRequest {
+        settle_type: SettleType::Ack, delivery_tag: msg.delivery_tag }).await?;
+                    }
+                    else => anyhow::bail!("all consumers closed unexpectedly"),
+                }
     }
 
     let sum: usize = counts.iter().sum();
@@ -1292,8 +1323,9 @@ async fn multi_topic_multi_group_isolation() -> anyhow::Result<()> {
     for _ in 0..100 {
         let m = a_ga.messages.recv().await.context("receiving message")?;
         a_seen.push(String::from_utf8(m.message.payload.clone())?);
-        a_ga.acker
-            .send(AckRequest {
+        a_ga.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: m.delivery_tag,
             })
             .await?;
@@ -1311,14 +1343,16 @@ async fn multi_topic_multi_group_isolation() -> anyhow::Result<()> {
         b2_seen.push(String::from_utf8(m2.message.payload.clone())?);
 
         b_gb1
-            .acker
-            .send(AckRequest {
+            .settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: m1.delivery_tag,
             })
             .await?;
         b_gb2
-            .acker
-            .send(AckRequest {
+            .settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: m2.delivery_tag,
             })
             .await?;
@@ -1400,8 +1434,9 @@ async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
             let r = fastrand::u8(..100);
             if r < 70 {
                 // ACK most of the time
-                cons.acker
-                    .send(AckRequest {
+                cons.settler
+                    .send(SettleRequest {
+                        settle_type: SettleType::Ack,
                         delivery_tag: msg.delivery_tag,
                     })
                     .await?;
@@ -1421,8 +1456,9 @@ async fn randomized_publish_consume_fuzz_delivery_tags() -> anyhow::Result<()> {
     // Drain any last messages
     while let Ok(msg) = cons.messages.try_recv() {
         received.push((msg.delivery_tag, msg.message.payload.clone()));
-        cons.acker
-            .send(AckRequest {
+        cons.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -1521,8 +1557,9 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
             let r = fastrand::u8(..100);
             if r < 70 {
                 // ACK most of the time
-                cons.acker
-                    .send(AckRequest {
+                cons.settler
+                    .send(SettleRequest {
+                        settle_type: SettleType::Ack,
                         delivery_tag: msg.delivery_tag,
                     })
                     .await?;
@@ -1542,8 +1579,9 @@ async fn randomized_publish_consume_fuzz_offsets() -> anyhow::Result<()> {
     // Drain any last messages
     while let Ok(msg) = cons.messages.try_recv() {
         received.push((msg.message.offset, msg.message.payload.clone()));
-        cons.acker
-            .send(AckRequest {
+        cons.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: msg.delivery_tag,
             })
             .await?;
@@ -1616,8 +1654,9 @@ async fn cursor_never_moves_backwards() -> anyhow::Result<()> {
             assert!(m.message.offset > prev, "cursor went backwards");
         }
         last = Some(m.message.offset);
-        c.acker
-            .send(AckRequest {
+        c.settler
+            .send(SettleRequest {
+                settle_type: SettleType::Ack,
                 delivery_tag: m.delivery_tag,
             })
             .await?;
@@ -1678,8 +1717,9 @@ async fn ack_before_delivery_is_ignored() -> anyhow::Result<()> {
     let mut c = broker.subscribe("t", "g", make_default_cons_cfg()).await?;
 
     // ACK offset 0 before receiving it
-    c.acker
-        .send(AckRequest {
+    c.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: DeliveryTag { epoch: 1 },
         })
         .await?;
@@ -1688,8 +1728,9 @@ async fn ack_before_delivery_is_ignored() -> anyhow::Result<()> {
     let m = c.messages.recv().await.context("receiving message")?;
     assert_eq!(m.message.offset, 0);
 
-    c.acker
-        .send(AckRequest {
+    c.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: m.delivery_tag,
         })
         .await?;
@@ -1717,8 +1758,9 @@ async fn redelivery_does_not_advance_cursor() -> anyhow::Result<()> {
     assert_eq!(redelivered.message.offset, m0.message.offset);
 
     // ACK now
-    c.acker
-        .send(AckRequest {
+    c.settler
+        .send(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: redelivered.delivery_tag,
         })
         .await?;
@@ -1786,7 +1828,8 @@ async fn prefetch_releases_on_ack() -> anyhow::Result<()> {
     let m0 = c.recv().await.context("receiving message")?;
     assert_eq!(m0.message.offset, 0);
 
-    c.ack(AckRequest {
+    c.ack(SettleRequest {
+        settle_type: SettleType::Ack,
         delivery_tag: m0.delivery_tag,
     })
     .await?;
@@ -1828,7 +1871,8 @@ async fn prefetch_releases_on_expiry() -> anyhow::Result<()> {
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     // ack redelivery
-    c.ack(AckRequest {
+    c.ack(SettleRequest {
+        settle_type: SettleType::Ack,
         delivery_tag: redelivered.delivery_tag,
     })
     .await?;
@@ -1849,13 +1893,15 @@ async fn offsets_are_never_reused_after_cleanup() -> anyhow::Result<()> {
     let mut c = broker.subscribe("t", "g", make_default_cons_cfg()).await?;
 
     let m0 = c.recv().await.context("receiving message")?;
-    c.ack(AckRequest {
+    c.ack(SettleRequest {
+        settle_type: SettleType::Ack,
         delivery_tag: m0.delivery_tag,
     })
     .await?;
 
     let m1 = c.recv().await.context("receiving message")?;
-    c.ack(AckRequest {
+    c.ack(SettleRequest {
+        settle_type: SettleType::Ack,
         delivery_tag: m1.delivery_tag,
     })
     .await?;
@@ -1909,7 +1955,8 @@ async fn inflight_capacity_never_exceeds_prefetch() -> anyhow::Result<()> {
     broker.publish("t", b"b").await?;
 
     let m0 = c.recv().await.context("receiving message")?;
-    c.ack(AckRequest {
+    c.ack(SettleRequest {
+        settle_type: SettleType::Ack,
         delivery_tag: m0.delivery_tag,
     })
     .await?;
@@ -1940,7 +1987,8 @@ async fn ack_spam_does_not_increase_capacity() -> anyhow::Result<()> {
 
     // Spam ACKs for the same delivery tag
     for _ in 0..100 {
-        c.ack(AckRequest {
+        c.ack(SettleRequest {
+            settle_type: SettleType::Ack,
             delivery_tag: m.delivery_tag,
         })
         .await?;
@@ -2038,7 +2086,8 @@ async fn expiry_and_ack_race_never_double_frees() -> anyhow::Result<()> {
 
     // ACK *right* around expiry
     tokio::time::sleep(std::time::Duration::from_millis(950)).await;
-    c.ack(AckRequest {
+    c.ack(SettleRequest {
+        settle_type: SettleType::Ack,
         delivery_tag: m.delivery_tag,
     })
     .await?;

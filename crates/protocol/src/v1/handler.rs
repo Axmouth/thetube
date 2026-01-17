@@ -7,7 +7,7 @@ use crate::v1::{
 };
 use anyhow::Context;
 use fibril_broker::{
-    AckRequest, Broker, ConsumerConfig, ConsumerHandle, coordination::Coordination,
+    Broker, ConsumerConfig, ConsumerHandle, SettleRequest, SettleType, coordination::Coordination,
 };
 use fibril_metrics::{ConnectionStats, TcpStats};
 use fibril_storage::{AppendReceiptExt, Group, Offset, Topic};
@@ -27,13 +27,11 @@ struct ConnState {
 struct SubState {
     sub_id: u64,
     auto_ack: bool,
-    acker: tokio::sync::mpsc::Sender<AckRequest>,
+    acker: tokio::sync::mpsc::Sender<SettleRequest>,
     task: tokio::task::JoinHandle<()>,
 }
 
-pub async fn run_server<
-    C: Coordination + Send + Sync + 'static,
->(
+pub async fn run_server<C: Coordination + Send + Sync + 'static>(
     addr: SocketAddr,
     broker: Arc<Broker<C>>,
     tcp_stats: Arc<TcpStats>,
@@ -71,9 +69,7 @@ pub async fn run_server<
     }
 }
 
-pub async fn handle_connection<
-    C: Coordination + Send + Sync + 'static,
->(
+pub async fn handle_connection<C: Coordination + Send + Sync + 'static>(
     socket: tokio::net::TcpStream,
     broker: Arc<Broker<C>>,
     tcp_stats: Arc<TcpStats>,
@@ -294,7 +290,7 @@ pub async fn handle_connection<
 
                 let ConsumerHandle {
                     messages,
-                    acker,
+                    settler: acker,
                     sub_id,
                     ..
                 } = consumer;
@@ -321,8 +317,7 @@ pub async fn handle_connection<
                             group: msg.group.clone(),
                             partition: msg.message.partition,
                             offset: msg.message.offset,
-                            delivery_tag_epoch: msg.delivery_tag.epoch,
-                            epoch: msg.delivery_tag.epoch,
+                            delivery_tag: msg.delivery_tag,
                             payload: msg.message.payload.clone(),
                         };
 
@@ -339,7 +334,8 @@ pub async fn handle_connection<
                         // 2. Auto-ack ONLY after successful send
                         if auto_ack {
                             let _ = acker
-                                .send(AckRequest {
+                                .send(SettleRequest {
+                                    settle_type: SettleType::Ack,
                                     delivery_tag: msg.delivery_tag,
                                 })
                                 .await;
@@ -381,7 +377,10 @@ pub async fn handle_connection<
                     && !sub.auto_ack
                 {
                     for tag in ack.tags {
-                        let req = AckRequest { delivery_tag: tag };
+                        let req = SettleRequest {
+                            delivery_tag: tag,
+                            settle_type: SettleType::Ack,
+                        };
                         let _ = sub.acker.send(req).await;
                     }
                 }

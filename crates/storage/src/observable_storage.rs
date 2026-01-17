@@ -1,8 +1,8 @@
 use fibril_metrics::*;
 use fibril_util::UnixMillis;
-use stroma_core::{AppendCompletion, IoError};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use stroma_core::{AppendCompletion, IoError};
 
 use crate::{Group, LogId, Offset, Storage, StorageError, StoredMessage, Topic};
 
@@ -51,7 +51,8 @@ impl<S: Storage> Storage for ObservableStorage<S> {
         observe!(
             self.stats,
             writes,
-            self.inner().append_enqueue(topic, partition, payload, completion)
+            self.inner()
+                .append_enqueue(topic, partition, payload, completion)
         )
     }
 

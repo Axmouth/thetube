@@ -1,6 +1,27 @@
 deny topic etc names beyond simple fs compatible setups
 
+groups will be cosmetic to create topics like Topic::Group
+
+Add display names to topics/groups for logging/ui
+
+add events for changing queue settings (ttl, max inflight, etc)
+add global event log for stroma setting changes
+Investigate need for Requeued event?
+Use enqueued map to fetch available(event log is now source of truth and atomicity)
+append message must now add enqueued event too and make sure both succeed before returning ok(maybe add a custom completion type that can add the event if event possible? or find another efficvient way)
+
+split Keratin writer to three threads, for pipelinining 1. Batching, 2. Writing and Fsyncing(or fsync yet another?), 3. Notifying awaiters when done. Use channels to efficiently pass data to the next.
+
+Make all broker side channels bounder(to avoid OOM on slow consumers by creating backpressure upstream)
+
+Finish dead letter queue implementation, untangle any fallible/storage bits to outside state methods and on event log application
+Perhaps use completions to apply the events in memory only after persisting them
+
+clean up group related tests
+
 test big payloads
+
+Investigate single log(storage message log only used for messages beyond a certain size?) for stroma topic state? Message Offsets are now enqueue offsets, requeue event to avoid payload duplication
 
 TODO:
 Broker should no longer:
@@ -10,10 +31,6 @@ start = stroma.next_deliverable(tp,g, current_cursor, upper)
 Also: redelivery queue should remain bounded by inflight cap (it mostly is already), but don’t let it accumulate unbounded offsets from repeated failures—Stroma can own "expired offsets" listing.
 
 Redelivery not counted as inflight(not added to set)? Consider how to handle
-
-Revisit batch size/timeout dynamic rampups based on load (Revisit PID controller setup?)
-
-refactor batching to not be ad hoc but separate layer with centralized reusable logic
 
 play with having code return dummy responses and see max broker throughput and bottlenecks
 
@@ -25,11 +42,13 @@ more cleanup tests
 
 cleanup leftover inflight without message (or better figure why it happens)
 
-Make sure cleanup reclaims space(seems not to?)
+Make sure cleanup reclaims space
 
 config
 
 Handshake two way
+
+proper connection handling(heartbeat, ping pong, early dc detection)
 
 ack correct matching(sub id?), in tcp layer
 
@@ -39,17 +58,13 @@ max unconfirmed per publisher
 
 slow ingress on memory/storage pressure
 
-better enforced write guarantees(getting a confirm, etc, means already on disk) (enqueue confirms, send on batch write?)
-
 unwrap/expect cleanup
-
-proper connection handling(heartbeat, ping pong, early dc detection)
 
 experiment with spreading delivered messages by making some consumers slower and see what happens
 
 better handling of batching slowdown when confirms not drained
 
-better error handling(return loud errors when failing to publish)
+better error handling(return louder errors when failing to publish)
 
 diagnostics queue/channel to allow sending up non fatal issues and tallying/observing them better?
 
@@ -71,8 +86,6 @@ on restart, read it directly
 clusters (leader through shared networked storage initially, raft replication later?)
 
 cli
-
-confirm stream(option, config) and test
 
 metadata(content type, redelivered, etc)
 

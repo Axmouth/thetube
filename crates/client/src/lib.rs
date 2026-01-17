@@ -37,7 +37,7 @@ pub struct AutoAckedSubscription {
 }
 
 pub struct Message {
-    pub offset: u64,
+    pub delivery_tag: DeliveryTag,
     pub payload: Vec<u8>,
 }
 
@@ -47,18 +47,51 @@ impl Message {
     }
 }
 
+pub enum SettleRequest {
+    Ack {
+        offset: DeliveryTag,
+    },
+    Nack {
+        offset: DeliveryTag,
+        requeue: bool,
+    },
+    Reject {
+        offset: DeliveryTag,
+        requeue: bool,
+    },
+}
+
 pub struct AckableMessage {
-    pub offset: u64,
+    pub delivery_tag: DeliveryTag,
     pub payload: Vec<u8>,
-    ack: oneshot::Sender<u64>,
+    settle: oneshot::Sender<SettleRequest>,
 }
 
 impl AckableMessage {
     // TODO: return simple message
-    pub async fn ack(self) -> anyhow::Result<()> {
+    pub async fn ack(self) -> anyhow::Result<Message> {
         // TODO: bubble errors
-        let _ = self.ack.send(self.offset);
-        Ok(())
+        let _ = self.settle.send(SettleRequest::Ack { offset: self.delivery_tag });
+        Ok(Message {
+            delivery_tag: self.delivery_tag,
+            payload: self.payload,
+        })
+    }
+
+    pub async fn nack(self) -> anyhow::Result<Message> {
+        let _ = self.settle.send(SettleRequest::Nack { offset: self.delivery_tag, requeue: false });
+        Ok(Message {
+            delivery_tag: self.delivery_tag,
+            payload: self.payload,
+        })
+    }
+
+    pub async fn reject(self, requeue: bool) -> anyhow::Result<Message> {
+        let _ = self.settle.send(SettleRequest::Reject { offset: self.delivery_tag, requeue });
+        Ok(Message {
+            delivery_tag: self.delivery_tag,
+            payload: self.payload,
+        })
     }
 
     pub fn deserialize<T: DeserializeOwned>(&self) -> anyhow::Result<T> {
@@ -172,7 +205,17 @@ enum Command {
     },
     Ack {
         sub_id: u64,
-        delivery_tag_epoch: u64,
+        delivery_tag: DeliveryTag,
+    },
+    Nack {
+        sub_id: u64,
+        delivery_tag: DeliveryTag,
+        requeue: bool,
+    },
+    Reject {
+        sub_id: u64,
+        delivery_tag: DeliveryTag,
+        requeue: bool,
     },
 }
 
@@ -315,15 +358,39 @@ async fn start_engine(
                         waiters.insert(req_id, Waiter::SubscribeAuto(reply));
                         let _ = framed.send(encode(Op::Subscribe, req_id, &req)).await;
                     }
-                    Command::Ack { sub_id, delivery_tag_epoch } => {
+                    Command::Ack { sub_id, delivery_tag } => {
                         if let Some(s) = subs.lock().await.get(&sub_id) {
                             let ack = Ack {
                                 topic: s.topic.clone(),
                                 group: s.group.clone(),
                                 partition: s.partition,
-                                tags: vec![DeliveryTag { epoch: delivery_tag_epoch}],
+                                tags: vec![delivery_tag],
                             };
                             let _ = framed.send(encode(Op::Ack, 0, &ack)).await;
+                        }
+                    }
+                    Command::Nack { sub_id, delivery_tag, requeue } => {
+                        if let Some(s) = subs.lock().await.get(&sub_id) {
+                            let nack = Nack {
+                                topic: s.topic.clone(),
+                                group: s.group.clone(),
+                                partition: s.partition,
+                                tags: vec![delivery_tag],
+                                requeue,
+                            };
+                            let _ = framed.send(encode(Op::Nack, 0, &nack)).await;
+                        }
+                    }
+                    Command::Reject { sub_id, delivery_tag, requeue } => {
+                        if let Some(s) = subs.lock().await.get(&sub_id) {
+                            let rej = Reject {
+                                topic: s.topic.clone(),
+                                group: s.group.clone(),
+                                partition: s.partition,
+                                tags: vec![delivery_tag],
+                                requeue,
+                            };
+                            let _ = framed.send(encode(Op::Reject, 0, &rej)).await;
                         }
                     }
                 },
@@ -361,16 +428,26 @@ async fn start_engine(
                                     SubDelivery::Manual(tx) => {
                                         let (ack_tx, ack_rx) = oneshot::channel();
                                         let msg = AckableMessage {
-                                            offset: d.offset,
+                                            delivery_tag: d.delivery_tag,
                                             payload: d.payload,
-                                            ack: ack_tx,
+                                            settle: ack_tx,
                                         };
 
                                         if tx.send(msg).await.is_ok() {
                                             // TODO: will hang forever unless we cancel it? Investigate/fix
                                             tokio::select! {
-                                                Ok(tag_epoch) = ack_rx => {
-                                                    let _ = cmd_tx.send(Command::Ack { sub_id: d.sub_id, delivery_tag_epoch: tag_epoch  }).await;
+                                                Ok(settle_request) = ack_rx => {
+                                                    match settle_request {
+                                                        SettleRequest::Ack { offset } => {
+                                                            let _ = cmd_tx.send(Command::Ack { sub_id: d.sub_id, delivery_tag: offset }).await;
+                                                        }
+                                                        SettleRequest::Nack { offset, requeue } => {
+                                                            let _ = cmd_tx.send(Command::Nack { sub_id: d.sub_id, delivery_tag: offset, requeue }).await;
+                                                        }
+                                                        SettleRequest::Reject { offset, requeue } => {
+                                                            let _ = cmd_tx.send(Command::Reject { sub_id: d.sub_id, delivery_tag: offset, requeue }).await;
+                                                        }
+                                                    }
                                                 }
                                                 _ = shutdown_acks.notified() => {
                                                     // engine is shutting down, drop silently
@@ -381,7 +458,7 @@ async fn start_engine(
 
                                     SubDelivery::Auto(tx) => {
                                         let _ = tx.send(Message {
-                                            offset: d.offset,
+                                            delivery_tag: d.delivery_tag,
                                             payload: d.payload,
                                         }).await;
                                     }

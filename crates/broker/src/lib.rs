@@ -3,19 +3,17 @@ pub mod coordination;
 use crossbeam::queue::SegQueue;
 use dashmap::DashMap;
 use fibril_metrics::BrokerStats;
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
 use fibril_storage::{BrokerCompletionPair, CompletionPair};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::coordination::Coordination;
 use fibril_storage::{
-    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError, Topic
+    DeliverableMessage, DeliveryTag, Group, LogId, Offset, Storage, StorageError, Topic,
 };
 use fibril_util::{UnixMillis, unix_millis};
 
@@ -95,10 +93,17 @@ impl GroupState {
     }
 }
 
-pub struct AckRequest {
+pub enum SettleType {
+    Ack,
+    Nack { requeue: Option<bool> },
+    Reject,
+}
+
+pub struct SettleRequest {
     // pub group: Group,
     // pub topic: Topic,
     // pub partition: Partition,
+    pub settle_type: SettleType,
     pub delivery_tag: DeliveryTag,
 }
 
@@ -167,12 +172,12 @@ pub struct ConsumerHandle {
     // TODO: find way to make this complete not on channel deliver, but response sent
     pub messages: tokio::sync::mpsc::Receiver<DeliverableMessage>,
     // TODO: Should it be ack only or generally respond?
-    pub acker: tokio::sync::mpsc::Sender<AckRequest>,
+    pub settler: tokio::sync::mpsc::Sender<SettleRequest>,
 }
 
 impl ConsumerHandle {
-    pub async fn ack(&self, ack_request: AckRequest) -> Result<(), BrokerError> {
-        self.acker
+    pub async fn ack(&self, ack_request: SettleRequest) -> Result<(), BrokerError> {
+        self.settler
             .send(ack_request)
             .await
             .map_err(|_| BrokerError::ChannelClosed)
@@ -231,8 +236,7 @@ impl ConfirmStream {
     }
 }
 
-struct DeliveryCtx
-{
+struct DeliveryCtx {
     storage: Arc<dyn Storage>,
     group_state: Arc<GroupState>,
     topic: Topic,
@@ -290,9 +294,7 @@ impl TaskGroup {
 
 // TODO: Injectable clock for testing
 #[derive(Debug)]
-pub struct Broker<
-    C: Coordination + Send + Sync + 'static,
-> {
+pub struct Broker<C: Coordination + Send + Sync + 'static> {
     pub config: BrokerConfig,
     storage: Arc<dyn Storage>,
     coord: Arc<C>,
@@ -307,9 +309,7 @@ pub struct Broker<
     next_sub_id: AtomicU64,
 }
 
-impl<C: Coordination + Send + Sync + 'static>
-    Broker<C>
-{
+impl<C: Coordination + Send + Sync + 'static> Broker<C> {
     pub async fn try_new(
         storage: Arc<impl Storage + 'static>,
         coord: C,
@@ -468,7 +468,7 @@ impl<C: Coordination + Send + Sync + 'static>
         let key = (topic_clone.clone(), group_clone.clone());
 
         let (msg_tx, msg_rx) = mpsc::channel(prefetch_count);
-        let (ack_tx, mut ack_rx) = mpsc::channel::<AckRequest>(prefetch_count);
+        let (ack_tx, mut ack_rx) = mpsc::channel::<SettleRequest>(prefetch_count);
         let ack_tx_clone = ack_tx.clone();
 
         // Register consumer in group state
@@ -695,7 +695,7 @@ impl<C: Coordination + Send + Sync + 'static>
             partition,
             config: cfg,
             messages: msg_rx,
-            acker: ack_tx_clone,
+            settler: ack_tx_clone,
         })
     }
 
@@ -1049,9 +1049,12 @@ async fn compute_start_offset(
     Ok(cur)
 }
 
-pub fn maybe_auto_ack(auto_ack: bool, ack_tx: &mpsc::Sender<AckRequest>, tag: DeliveryTag) {
+pub fn maybe_auto_ack(auto_ack: bool, ack_tx: &mpsc::Sender<SettleRequest>, tag: DeliveryTag) {
     if auto_ack {
-        let _ = ack_tx.try_send(AckRequest { delivery_tag: tag });
+        let _ = ack_tx.try_send(SettleRequest {
+            delivery_tag: tag,
+            settle_type: SettleType::Ack,
+        });
     }
 }
 

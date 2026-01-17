@@ -40,6 +40,8 @@ pub enum Op {
 
     Deliver = 40,
     Ack = 41,
+    Nack = 42,
+    Reject = 43,
 
     Ping = 50,
     Pong = 51,
@@ -103,8 +105,7 @@ pub struct Deliver {
     pub group: String,
     pub partition: u32,
     pub offset: u64,
-    pub delivery_tag_epoch: u64, // keep opaque; you can set = offset
-    pub epoch: u64,
+    pub delivery_tag: DeliveryTag,
     pub payload: Vec<u8>,
 }
 
@@ -114,6 +115,24 @@ pub struct Ack {
     pub group: String,
     pub partition: u32,
     pub tags: Vec<DeliveryTag>, // batch
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Nack {
+    pub topic: String,
+    pub group: String,
+    pub partition: u32,
+    pub tags: Vec<DeliveryTag>, // batch
+    pub requeue: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Reject {
+    pub topic: String,
+    pub group: String,
+    pub partition: u32,
+    pub tags: Vec<DeliveryTag>, // batch
+    pub requeue: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
